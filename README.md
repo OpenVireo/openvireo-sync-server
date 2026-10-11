@@ -1,0 +1,111 @@
+# KeePassXC Sync Server
+
+A small REST server that stores KeePassXC databases so several devices can stay in sync.
+
+The server only ever sees the **encrypted** `.kdbx` file. KeePassXC downloads it, decrypts and merges it locally, then uploads the merged result. Your master password and keys never leave the client.
+
+## Quick start
+
+```sh
+cd sync_server
+npm install
+npm run add-user -- alice      # prints an access token, shown only once
+npm start                      # http://127.0.0.1:8787
+```
+
+Then in KeePassXC:
+
+1. Open your database and go to **Database → Database Settings → Remote Sync**.
+2. Enter a name, set **Type** to *KeePassXC Sync Server*, and fill in:
+   - **Server URL**: `http://127.0.0.1:8787`, or your `https://` URL
+   - **Database ID**: any name, e.g. `personal`
+   - **Access token**: the token printed by `add-user`
+3. Click **Test Connection**, then **Save**, then **OK**.
+4. Use **Database → Remote Sync → <name>** to sync.
+
+The first sync uploads your local database. Later syncs download the server copy, merge it with your local database (the same merge as *Merge from Database*), save it locally, and upload the result.
+
+Other devices use the same Database ID. If a device's copy uses a different password or key file, KeePassXC asks you to unlock the server copy before merging.
+
+### Setting up another device
+
+To get the database onto a new device:
+
+1. Use **Database → Import…** and choose *KeePassXC Sync Server (.kdbx)*.
+2. Enter the server URL and access token, then click **Load** to pick a database, or type its ID.
+3. Enter the database's password and/or key file.
+4. Choose where to import it:
+   - **Local Copy** opens the server database unchanged (same password) and asks where to save it. It is already linked to the server, so **Remote Sync** works right away.
+   - **Existing Database** copies its entries into a group of a database you have open.
+   - **Temporary Database** opens it without saving it anywhere first.
+
+## Configuration
+
+Set these as environment variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SYNC_HOST` | `127.0.0.1` | Address to listen on |
+| `SYNC_PORT` | `8787` | Port |
+| `SYNC_DATA_DIR` | `./data` | Where users and databases are stored |
+| `SYNC_MAX_DB_BYTES` | `52428800` | Upload size limit (50 MiB) |
+| `SYNC_HISTORY_SIZE` | `10` | How many previous versions of each database to keep |
+| `SYNC_TRUST_PROXY` | unset | Set to `1` when behind a reverse proxy on the same host |
+
+### Deploying beyond localhost
+
+The access token travels in the `Authorization` header, so **use HTTPS** for anything other than localhost. Keep the server on `127.0.0.1` and put a TLS-terminating reverse proxy (Caddy, nginx, …) in front of it. For example, with Caddy:
+
+```
+sync.example.com {
+    reverse_proxy 127.0.0.1:8787
+}
+```
+
+KeePassXC does not follow redirects, so the token is never forwarded to another host. Enter the final `https://` URL.
+
+## User management
+
+```sh
+npm run users -- add <name>      # create a user, or rotate their token
+npm run users -- remove <name>
+npm run users -- list
+```
+
+Each user has their own namespace and cannot see other users' databases. Only SHA-256 hashes of tokens are stored, in `data/users.json`. Changes to that file take effect without a restart.
+
+## API
+
+All endpoints except `/health` need `Authorization: Bearer <token>`. Errors are JSON: `{ "error": "..." }`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/health` | Liveness check |
+| `GET` | `/api/v1/databases` | List your databases (`id`, `revision`, `etag`, `size`, `updatedAt`) |
+| `GET` / `HEAD` | `/api/v1/databases/{id}` | Download a database. Supports `If-None-Match` (returns `304`) |
+| `PUT` | `/api/v1/databases/{id}` | Upload a database (raw `.kdbx` body) |
+| `DELETE` | `/api/v1/databases/{id}` | Delete a database and its history. Supports `If-Match` |
+
+`{id}` may contain letters, digits, `.`, `_` and `-`, up to 64 characters.
+
+### Concurrency
+
+Every version has an `ETag`, the quoted SHA-256 of the file. Uploads must say which version they replace:
+
+- `If-None-Match: *` creates the database. Returns `412` if it already exists.
+- `If-Match: "<etag>"` replaces exactly that version. Returns `412` if another device uploaded in the meantime.
+- An upload with neither header is rejected with `428` when the database already exists.
+
+This means two devices can never silently overwrite each other's changes. When KeePassXC gets a `412`, your local changes are already saved. Sync again to merge in the other device's changes.
+
+Uploads must start with the KDBX file signature (`415` otherwise). Uploads over the size limit get `413`.
+
+### History
+
+Before each overwrite, the previous version is copied to `data/databases/<user>/.history/<id>/<revision>.kdbx`. The newest `SYNC_HISTORY_SIZE` versions are kept. To roll back, copy one over manually.
+
+## Tests
+
+```sh
+npm test
+```
