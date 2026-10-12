@@ -6,11 +6,15 @@ The server only ever sees the **encrypted** `.kdbx` file. KeePassXC downloads it
 
 ## Quick start
 
+The server is written in C++17 on [Drogon](https://github.com/drogonframework/drogon).
+
 ```sh
+brew install drogon            # or: apt install libdrogon-dev, vcpkg install drogon, …
 cd sync_server
-npm install
-npm run add-user -- alice      # prints an access token, shown only once
-npm start                      # http://127.0.0.1:8787
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+./build/keepassxc-sync-server users add alice   # prints an access token, shown only once
+./build/keepassxc-sync-server                   # http://127.0.0.1:8787
 ```
 
 Then in KeePassXC:
@@ -47,10 +51,10 @@ Set these as environment variables:
 |---|---|---|
 | `SYNC_HOST` | `127.0.0.1` | Address to listen on |
 | `SYNC_PORT` | `8787` | Port |
-| `SYNC_DATA_DIR` | `./data` | Where users and databases are stored |
+| `SYNC_DATA_DIR` | `./data` | Where users and databases are stored (relative to the working directory) |
 | `SYNC_MAX_DB_BYTES` | `52428800` | Upload size limit (50 MiB) |
 | `SYNC_HISTORY_SIZE` | `10` | How many previous versions of each database to keep |
-| `SYNC_TRUST_PROXY` | unset | Set to `1` when behind a reverse proxy on the same host |
+| `SYNC_THREADS` | `0` | Number of I/O threads, `0` means one per CPU core |
 
 ### Deploying beyond localhost
 
@@ -67,9 +71,9 @@ KeePassXC does not follow redirects, so the token is never forwarded to another 
 ## User management
 
 ```sh
-npm run users -- add <name>      # create a user, or rotate their token
-npm run users -- remove <name>
-npm run users -- list
+./build/keepassxc-sync-server users add <name>      # create a user, or rotate their token
+./build/keepassxc-sync-server users remove <name>
+./build/keepassxc-sync-server users list
 ```
 
 Each user has their own namespace and cannot see other users' databases. Only SHA-256 hashes of tokens are stored, in `data/users.json`. Changes to that file take effect without a restart.
@@ -98,7 +102,7 @@ Every version has an `ETag`, the quoted SHA-256 of the file. Uploads must say wh
 
 This means two devices can never silently overwrite each other's changes. When KeePassXC gets a `412`, your local changes are already saved. Sync again to merge in the other device's changes.
 
-Uploads must start with the KDBX file signature (`415` otherwise). Uploads over the size limit get `413`.
+Uploads must start with the KDBX file signature (`415` otherwise). Uploads over the size limit get `413`; that response has no body because the upload is refused before it is read.
 
 ### History
 
@@ -107,5 +111,5 @@ Before each overwrite, the previous version is copied to `data/databases/<user>/
 ## Tests
 
 ```sh
-npm test
+cmake --build build && ./build/sync_server_test     # or: ctest --test-dir build
 ```
