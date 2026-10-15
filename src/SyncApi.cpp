@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -146,13 +148,83 @@ namespace syncserver
             resp->addHeader("X-Database-Revision", std::to_string(meta.revision));
         }
 
+        /**
+         * Server-sent event streams (GET /api/v1/events), per user. After every change to one of
+         * a user's databases each of their open streams gets
+         *   event: database
+         *   data: {"id": "...", "etag": "...", "revision": N}          (or "deleted": true)
+         * so devices can sync right away instead of waiting for their next poll.
+         */
+        class EventHub
+        {
+        public:
+            void subscribe(const std::string& user, ResponseStreamPtr stream)
+            {
+                std::shared_ptr<ResponseStream> shared(std::move(stream));
+                std::lock_guard lock(m_mutex);
+                // Tell the client how long to wait before reconnecting, and that it is connected
+                if (shared->send("retry: 5000\n: connected\n\n")) {
+                    m_streams[user].push_back(std::move(shared));
+                }
+            }
+
+            void publish(const std::string& user, const Json::Value& data)
+            {
+                Json::StreamWriterBuilder builder;
+                builder["indentation"] = "";
+                sendTo(user, "event: database\ndata: " + Json::writeString(builder, data) + "\n\n");
+            }
+
+            // Comments keep idle connections (and proxies) open and find streams whose client went away
+            void ping()
+            {
+                std::lock_guard lock(m_mutex);
+                for (auto& [user, streams] : m_streams) {
+                    dropFailed(streams, ": ping\n\n");
+                }
+            }
+
+        private:
+            void sendTo(const std::string& user, const std::string& message)
+            {
+                std::lock_guard lock(m_mutex);
+                auto it = m_streams.find(user);
+                if (it != m_streams.end()) {
+                    dropFailed(it->second, message);
+                }
+            }
+
+            static void dropFailed(std::vector<std::shared_ptr<ResponseStream>>& streams, const std::string& message)
+            {
+                streams.erase(std::remove_if(streams.begin(),
+                                             streams.end(),
+                                             [&message](const auto& stream) {
+                                                 if (stream->send(message)) {
+                                                     return false;
+                                                 }
+                                                 stream->close();
+                                                 return true;
+                                             }),
+                              streams.end());
+            }
+
+            std::mutex m_mutex;
+            std::map<std::string, std::vector<std::shared_ptr<ResponseStream>>> m_streams;
+        };
+
         class SyncApi
         {
         public:
             explicit SyncApi(const Config& config)
                 : m_users(config.dataDir)
                 , m_store(config.dataDir, config.historySize)
+                , m_events(std::make_shared<EventHub>())
             {
+            }
+
+            std::shared_ptr<EventHub> events() const
+            {
+                return m_events;
             }
 
             std::string authenticate(const HttpRequestPtr& req)
@@ -235,6 +307,11 @@ namespace syncserver
 
                 auto result =
                     m_store.write(user, id, data, [&](const auto& current) { checkWritePreconditions(req, current); });
+                Json::Value event;
+                event["id"] = id;
+                event["etag"] = result.meta.etag;
+                event["revision"] = static_cast<Json::Int64>(result.meta.revision);
+                m_events->publish(user, event);
                 auto resp = jsonResponse(result.created ? k201Created : k200OK, result.meta.toJson());
                 setMetaHeaders(resp, result.meta);
                 return resp;
@@ -251,12 +328,61 @@ namespace syncserver
                 if (!removed) {
                     throw HttpError(k404NotFound, "Database not found.");
                 }
+                Json::Value event;
+                event["id"] = id;
+                event["deleted"] = true;
+                m_events->publish(user, event);
                 return HttpResponse::newHttpResponse(k204NoContent, CT_NONE);
+            }
+
+            // GET <id>/history lists the kept versions, GET <id>/history/<revision> returns one
+            HttpResponsePtr history(const HttpRequestPtr& req, const std::string& user, const std::string& path)
+            {
+                auto slash = path.find('/');
+                auto id = path.substr(0, slash);
+                auto rest = path.substr(slash + 1);
+                validateId(id);
+                if (req->method() != Get) {
+                    throw HttpError(k405MethodNotAllowed, "Method not allowed.");
+                }
+
+                if (rest == "history") {
+                    auto versions = m_store.history(user, id);
+                    if (!versions) {
+                        throw HttpError(k404NotFound, "Database not found.");
+                    }
+                    Json::Value body;
+                    body["versions"] = Json::arrayValue;
+                    for (const auto& meta : *versions) {
+                        body["versions"].append(meta.toJson());
+                    }
+                    return jsonResponse(k200OK, body);
+                }
+
+                const std::string prefix = "history/";
+                auto revisionText = rest.substr(prefix.size());
+                if (rest.rfind(prefix, 0) != 0 || revisionText.empty() || revisionText.size() > 18
+                    || !std::all_of(revisionText.begin(), revisionText.end(), [](unsigned char c) {
+                           return std::isdigit(c);
+                       })) {
+                    throw HttpError(k404NotFound, "Not found.");
+                }
+                auto entry = m_store.readRevision(user, id, std::stoll(revisionText));
+                if (!entry) {
+                    throw HttpError(k404NotFound, "Version not found.");
+                }
+                auto resp = HttpResponse::newHttpResponse(k200OK, CT_APPLICATION_OCTET_STREAM);
+                resp->setBody(std::move(entry->data));
+                setMetaHeaders(resp, entry->meta);
+                return resp;
             }
 
             HttpResponsePtr database(const HttpRequestPtr& req, const std::string& id)
             {
                 auto user = authenticate(req);
+                if (id.find('/') != std::string::npos) {
+                    return history(req, user, id);
+                }
                 validateId(id);
                 switch (req->method()) {
                 case Get:
@@ -273,6 +399,7 @@ namespace syncserver
         private:
             UserStore m_users;
             DatabaseStore m_store;
+            std::shared_ptr<EventHub> m_events;
         };
 
         std::string errorMessageFor(HttpStatusCode status)
@@ -325,6 +452,27 @@ namespace syncserver
                 respond(callback, [&] { return api->list(req); });
             },
             {Get});
+
+        app.registerHandler(
+            "/api/v1/events",
+            [api](const HttpRequestPtr& req, Callback&& callback) {
+                std::string user;
+                try {
+                    user = api->authenticate(req);
+                } catch (const HttpError& e) {
+                    callback(errorResponse(e.status, e.what()));
+                    return;
+                }
+                auto events = api->events();
+                auto resp = HttpResponse::newAsyncStreamResponse(
+                    [events, user](ResponseStreamPtr stream) { events->subscribe(user, std::move(stream)); }, true);
+                resp->setContentTypeString("text/event-stream");
+                // Reverse proxies such as nginx would otherwise hold events back
+                resp->addHeader("X-Accel-Buffering", "no");
+                callback(resp);
+            },
+            {Get});
+        app.getLoop()->runEvery(25.0, [events = api->events()] { events->ping(); });
 
         // A regex route so ids that are not path-safe (e.g. "..%2Fusers.json") reach validateId() and get a 400
         app.registerHandlerViaRegex(

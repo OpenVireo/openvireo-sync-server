@@ -35,6 +35,7 @@ namespace syncserver
      *   <dataDir>/databases/<user>/<id>.kdbx        current version
      *   <dataDir>/databases/<user>/<id>.meta.json   { id, revision, etag, size, updatedAt }
      *   <dataDir>/databases/<user>/.history/<id>/<revision>.kdbx   previous versions
+     *   <dataDir>/databases/<user>/.history/<id>/<revision>.json   their metadata
      */
     class DatabaseStore
     {
@@ -63,6 +64,11 @@ namespace syncserver
         write(const std::string& user, const std::string& id, std::string_view data, const Precondition& precondition);
         bool remove(const std::string& user, const std::string& id, const Precondition& precondition);
 
+        // The current version and the kept previous ones, newest first; nullopt when the database doesn't exist
+        std::optional<std::vector<DatabaseMeta>> history(const std::string& user, const std::string& id);
+        // One version, the current one or a kept previous one
+        std::optional<Entry> readRevision(const std::string& user, const std::string& id, int64_t revision);
+
     private:
         struct Paths
         {
@@ -74,6 +80,8 @@ namespace syncserver
 
         Paths paths(const std::string& user, const std::string& id) const;
         std::optional<DatabaseMeta> readMeta(const std::string& user, const std::string& id) const;
+        // Metadata of a kept previous version, from its .json or, for versions kept before those existed, the file
+        static DatabaseMeta historyMeta(const std::string& id, const std::filesystem::path& blob);
         // Serialises operations on one database so check-then-write is atomic
         std::shared_ptr<std::mutex> lockFor(const std::string& user, const std::string& id);
         void pruneHistory(const std::filesystem::path& historyDir) const;

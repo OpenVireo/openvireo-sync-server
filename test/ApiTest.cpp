@@ -8,9 +8,15 @@
 #include "Util.h"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <future>
 #include <thread>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 using namespace drogon;
 namespace fs = std::filesystem;
@@ -177,7 +183,8 @@ DROGON_TEST(KeepsBoundedHistory)
         history.push_back(item.path().filename().string());
     }
     std::sort(history.begin(), history.end());
-    CHECK((history == std::vector<std::string>{"4.kdbx", "5.kdbx"}));
+    // Each kept version has its metadata next to it
+    CHECK((history == std::vector<std::string>{"4.json", "4.kdbx", "5.json", "5.kdbx"}));
 }
 
 DROGON_TEST(UsersCannotSeeEachOthersDatabases)
@@ -303,6 +310,120 @@ DROGON_TEST(KeepsTokensFromBeforeDevicesWorking)
     CHECK(users.revokeDevice("dave", "legacy"));
     CHECK(!users.authenticate(oldToken).has_value());
     fs::remove_all(dir);
+}
+
+DROGON_TEST(ListsAndReturnsKeptVersions)
+{
+    auto etag = create("versions", "version 1");
+    for (int i = 2; i <= 3; ++i) {
+        auto resp = request(
+            Put, "/databases/versions", {g_aliceToken, {{"If-Match", etag}}, fakeDatabase("version " + std::to_string(i))});
+        REQUIRE(resp->statusCode() == k200OK);
+        etag = resp->getHeader("ETag");
+    }
+
+    auto list = request(Get, "/databases/versions/history");
+    REQUIRE(list->statusCode() == k200OK);
+    auto versions = json(list)["versions"];
+    REQUIRE(versions.size() == 3);
+    CHECK(versions[0]["revision"].asInt64() == 3);
+    CHECK(versions[0]["etag"].asString() == etag);
+    CHECK(versions[2]["revision"].asInt64() == 1);
+    CHECK(!versions[2]["updatedAt"].asString().empty());
+
+    auto first = request(Get, "/databases/versions/history/1");
+    REQUIRE(first->statusCode() == k200OK);
+    CHECK(first->body() == fakeDatabase("version 1"));
+    CHECK(first->getHeader("X-Database-Revision") == "1");
+    CHECK(first->getHeader("ETag") == versions[2]["etag"].asString());
+    CHECK(request(Get, "/databases/versions/history/3")->body() == fakeDatabase("version 3"));
+
+    CHECK(request(Get, "/databases/versions/history/9")->statusCode() == k404NotFound);
+    CHECK(request(Get, "/databases/versions/history/abc")->statusCode() == k404NotFound);
+    CHECK(request(Get, "/databases/missing/history")->statusCode() == k404NotFound);
+    CHECK(request(Put, "/databases/versions/history")->statusCode() == k405MethodNotAllowed);
+    // Other users can't read them
+    CHECK(request(Get, "/databases/versions/history", {g_bobToken})->statusCode() == k404NotFound);
+}
+
+namespace
+{
+    // An open GET /events, read with a plain socket because the HTTP client waits for whole responses
+    class EventStream
+    {
+    public:
+        explicit EventStream(const std::string& token)
+        {
+            auto port = std::stoi(g_baseUrl.substr(g_baseUrl.rfind(':') + 1));
+            m_socket = ::socket(AF_INET, SOCK_STREAM, 0);
+            sockaddr_in address{};
+            address.sin_family = AF_INET;
+            address.sin_port = htons(static_cast<uint16_t>(port));
+            address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            if (::connect(m_socket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+                throw std::runtime_error("cannot connect");
+            }
+            timeval timeout{0, 200 * 1000};
+            ::setsockopt(m_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+            auto request = "GET /api/v1/events HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer " + token
+                           + "\r\nAccept: text/event-stream\r\n\r\n";
+            ::send(m_socket, request.data(), request.size(), 0);
+        }
+
+        ~EventStream()
+        {
+            ::close(m_socket);
+        }
+
+        // Reads until `text` arrives or `seconds` pass
+        bool waitFor(const std::string& text, double seconds = 5)
+        {
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+            while (m_received.find(text) == std::string::npos && std::chrono::steady_clock::now() < deadline) {
+                char buffer[4096];
+                auto n = ::recv(m_socket, buffer, sizeof(buffer), 0);
+                if (n > 0) {
+                    m_received.append(buffer, static_cast<size_t>(n));
+                } else if (n == 0) {
+                    break;
+                }
+            }
+            return m_received.find(text) != std::string::npos;
+        }
+
+        const std::string& received() const
+        {
+            return m_received;
+        }
+
+    private:
+        int m_socket = -1;
+        std::string m_received;
+    };
+} // namespace
+
+DROGON_TEST(StreamsChangesToTheOwnersDevices)
+{
+    EventStream alice(g_aliceToken);
+    EventStream bob(g_bobToken);
+    REQUIRE(alice.waitFor(": connected"));
+    REQUIRE(alice.received().find("text/event-stream") != std::string::npos);
+    REQUIRE(bob.waitFor(": connected"));
+
+    auto etag = create("streamed");
+    CHECK(alice.waitFor("event: database"));
+    CHECK(alice.waitFor("\"id\":\"streamed\""));
+    CHECK(alice.received().find(etag.substr(1, etag.size() - 2)) != std::string::npos);
+    CHECK(alice.received().find("\"revision\":1") != std::string::npos);
+
+    request(Delete, "/databases/streamed", {g_aliceToken, {{"If-Match", etag}}});
+    CHECK(alice.waitFor("\"deleted\":true"));
+
+    // Bob only hears about his own databases
+    CHECK(!bob.waitFor("event: database", 0.5));
+
+    EventStream stranger("not-a-token");
+    CHECK(stranger.waitFor("401"));
 }
 
 int main(int argc, char** argv)

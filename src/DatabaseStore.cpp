@@ -3,6 +3,7 @@
 #include "Util.h"
 
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 
 namespace fs = std::filesystem;
@@ -12,6 +13,57 @@ namespace syncserver
     namespace
     {
         constexpr std::string_view META_SUFFIX = ".meta.json";
+
+        std::optional<Json::Value> parseJson(const std::string& text)
+        {
+            Json::Value json;
+            Json::CharReaderBuilder builder;
+            std::string errors;
+            std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+            if (!reader->parse(text.data(), text.data() + text.size(), &json, &errors) || !json.isObject()) {
+                return std::nullopt;
+            }
+            return json;
+        }
+
+        std::string toJsonString(const Json::Value& value)
+        {
+            Json::StreamWriterBuilder builder;
+            builder["indentation"] = "  ";
+            return Json::writeString(builder, value);
+        }
+
+        DatabaseMeta metaFromJson(const Json::Value& json, const std::string& id)
+        {
+            DatabaseMeta meta;
+            meta.id = json.get("id", id).asString();
+            meta.revision = json["revision"].asInt64();
+            meta.etag = json["etag"].asString();
+            meta.size = json["size"].asUInt64();
+            meta.updatedAt = json["updatedAt"].asString();
+            return meta;
+        }
+
+        // Kept versions are named <revision>.kdbx
+        std::optional<int64_t> revisionOf(const fs::path& path)
+        {
+            if (path.extension() != ".kdbx") {
+                return std::nullopt;
+            }
+            try {
+                return std::stoll(path.stem().string());
+            } catch (const std::exception&) {
+                return std::nullopt;
+            }
+        }
+
+        std::chrono::system_clock::time_point toSystemTime(fs::file_time_type time)
+        {
+            // C++17 has no clock_cast; both clocks advance together, so carry the offset over
+            using namespace std::chrono;
+            return time_point_cast<system_clock::duration>(time - fs::file_time_type::clock::now()
+                                                           + system_clock::now());
+        }
     } // namespace
 
     Json::Value DatabaseMeta::toJson() const
@@ -53,21 +105,11 @@ namespace syncserver
         if (!fs::exists(file)) {
             return std::nullopt;
         }
-        auto text = readFile(file);
-        Json::Value json;
-        Json::CharReaderBuilder builder;
-        std::string errors;
-        std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-        if (!reader->parse(text.data(), text.data() + text.size(), &json, &errors) || !json.isObject()) {
-            throw std::runtime_error("Invalid " + file.string() + ": " + errors);
+        auto json = parseJson(readFile(file));
+        if (!json) {
+            throw std::runtime_error("Invalid " + file.string());
         }
-        DatabaseMeta meta;
-        meta.id = json.get("id", id).asString();
-        meta.revision = json["revision"].asInt64();
-        meta.etag = json["etag"].asString();
-        meta.size = json["size"].asUInt64();
-        meta.updatedAt = json["updatedAt"].asString();
-        return meta;
+        return metaFromJson(*json, id);
     }
 
     std::optional<DatabaseMeta> DatabaseStore::meta(const std::string& user, const std::string& id)
@@ -127,9 +169,9 @@ namespace syncserver
 
         if (current && m_historySize > 0) {
             ensurePrivateDirectory(p.history);
-            fs::copy_file(p.blob,
-                          p.history / (std::to_string(current->revision) + ".kdbx"),
-                          fs::copy_options::overwrite_existing);
+            const auto name = std::to_string(current->revision);
+            fs::copy_file(p.blob, p.history / (name + ".kdbx"), fs::copy_options::overwrite_existing);
+            atomicWriteFile(p.history / (name + ".json"), toJsonString(current->toJson()));
             pruneHistory(p.history);
         }
 
@@ -142,9 +184,7 @@ namespace syncserver
 
         // Blob first, then metadata, each via rename so readers never see a partial file
         atomicWriteFile(p.blob, data);
-        Json::StreamWriterBuilder builder;
-        builder["indentation"] = "  ";
-        atomicWriteFile(p.meta, Json::writeString(builder, meta.toJson()));
+        atomicWriteFile(p.meta, toJsonString(meta.toJson()));
         return {std::move(meta), !current};
     }
 
@@ -169,19 +209,75 @@ namespace syncserver
     {
         std::vector<int64_t> revisions;
         for (const auto& item : fs::directory_iterator(historyDir)) {
-            const auto& path = item.path();
-            if (path.extension() != ".kdbx") {
-                continue;
-            }
-            try {
-                revisions.push_back(std::stoll(path.stem().string()));
-            } catch (const std::exception&) {
-                // Not one of ours
+            if (auto revision = revisionOf(item.path())) {
+                revisions.push_back(*revision);
             }
         }
         std::sort(revisions.begin(), revisions.end(), std::greater<>());
         for (size_t i = m_historySize; i < revisions.size(); ++i) {
-            fs::remove(historyDir / (std::to_string(revisions[i]) + ".kdbx"));
+            const auto name = std::to_string(revisions[i]);
+            fs::remove(historyDir / (name + ".kdbx"));
+            fs::remove(historyDir / (name + ".json"));
         }
+    }
+
+    DatabaseMeta DatabaseStore::historyMeta(const std::string& id, const fs::path& blob)
+    {
+        auto jsonFile = blob;
+        jsonFile.replace_extension(".json");
+        if (fs::exists(jsonFile)) {
+            if (auto json = parseJson(readFile(jsonFile))) {
+                return metaFromJson(*json, id);
+            }
+        }
+        auto data = readFile(blob);
+        DatabaseMeta meta;
+        meta.id = id;
+        meta.revision = revisionOf(blob).value_or(0);
+        meta.etag = "\"" + sha256Hex(data) + "\"";
+        meta.size = data.size();
+        meta.updatedAt = isoTimestamp(toSystemTime(fs::last_write_time(blob)));
+        return meta;
+    }
+
+    std::optional<std::vector<DatabaseMeta>> DatabaseStore::history(const std::string& user, const std::string& id)
+    {
+        auto mutex = lockFor(user, id);
+        std::lock_guard lock(*mutex);
+        auto current = readMeta(user, id);
+        if (!current) {
+            return std::nullopt;
+        }
+        std::vector<DatabaseMeta> versions{*current};
+        std::error_code ec;
+        for (const auto& item : fs::directory_iterator(paths(user, id).history, ec)) {
+            if (revisionOf(item.path())) {
+                versions.push_back(historyMeta(id, item.path()));
+            }
+        }
+        std::sort(versions.begin(), versions.end(), [](const auto& a, const auto& b) {
+            return a.revision > b.revision;
+        });
+        return versions;
+    }
+
+    std::optional<DatabaseStore::Entry>
+    DatabaseStore::readRevision(const std::string& user, const std::string& id, int64_t revision)
+    {
+        auto mutex = lockFor(user, id);
+        std::lock_guard lock(*mutex);
+        auto current = readMeta(user, id);
+        if (!current) {
+            return std::nullopt;
+        }
+        auto p = paths(user, id);
+        if (revision == current->revision) {
+            return Entry{std::move(*current), readFile(p.blob)};
+        }
+        auto blob = p.history / (std::to_string(revision) + ".kdbx");
+        if (!fs::exists(blob)) {
+            return std::nullopt;
+        }
+        return Entry{historyMeta(id, blob), readFile(blob)};
     }
 } // namespace syncserver
