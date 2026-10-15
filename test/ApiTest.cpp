@@ -5,6 +5,7 @@
 #include "Config.h"
 #include "SyncApi.h"
 #include "UserStore.h"
+#include "Util.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -231,14 +232,87 @@ DROGON_TEST(DeleteHonoursIfMatch)
     CHECK(request(Delete, "/databases/doomed")->statusCode() == k404NotFound);
 }
 
+DROGON_TEST(EachDeviceHasItsOwnRevocableToken)
+{
+    syncserver::UserStore users(g_dataDir);
+    auto [phoneId, phoneToken] = users.addDevice("alice", "phone");
+    CHECK(phoneToken != g_aliceToken);
+
+    // Both devices see the same databases
+    create("shared-by-devices");
+    CHECK(request(Get, "/databases/shared-by-devices", {phoneToken})->statusCode() == k200OK);
+    CHECK(request(Get, "/databases/shared-by-devices", {g_aliceToken})->statusCode() == k200OK);
+
+    // Revoking the phone shuts it out at once and leaves the laptop alone
+    CHECK(users.revokeDevice("alice", phoneId));
+    CHECK(request(Get, "/databases/shared-by-devices", {phoneToken})->statusCode() == k401Unauthorized);
+    CHECK(request(Get, "/databases/shared-by-devices", {g_aliceToken})->statusCode() == k200OK);
+
+    CHECK(!users.revokeDevice("alice", phoneId));
+    CHECK(!users.revokeDevice("nobody", phoneId));
+    // A failed revoke for an unknown user doesn't create it
+    auto names = users.listUsers();
+    CHECK(std::find(names.begin(), names.end(), "nobody") == names.end());
+}
+
+DROGON_TEST(ListsDevicesAndWhenTheyWereLastSeen)
+{
+    auto dir = fs::temp_directory_path() / ("kpxc-sync-users-" + utils::getUuid());
+    syncserver::UserStore users(dir);
+    auto token = users.addUser("carol", "desktop");
+    auto [tabletId, tabletToken] = users.addDevice("carol", "tablet");
+
+    auto devices = users.listDevices("carol");
+    REQUIRE(devices.size() == 2);
+    CHECK(devices[1].id == tabletId);
+    CHECK(devices[1].name == "tablet");
+    CHECK(devices[0].lastSeenAt.empty());
+
+    auto identity = users.authenticate(token);
+    REQUIRE(identity.has_value());
+    CHECK(identity->user == "carol");
+    CHECK(identity->deviceId == devices[0].id);
+    CHECK(!users.listDevices("carol")[0].lastSeenAt.empty());
+    CHECK(users.listDevices("carol")[1].lastSeenAt.empty());
+
+    CHECK_THROWS(users.addUser("carol", "again"));
+    CHECK_THROWS(users.addDevice("carol", ""));
+    CHECK_THROWS(users.addDevice("nobody", "phone"));
+    fs::remove_all(dir);
+}
+
+DROGON_TEST(KeepsTokensFromBeforeDevicesWorking)
+{
+    auto dir = fs::temp_directory_path() / ("kpxc-sync-users-" + utils::getUuid());
+    fs::create_directories(dir);
+    const std::string oldToken = "token-from-an-older-server";
+    Json::Value data;
+    data["users"]["dave"]["tokenHash"] = syncserver::sha256Hex(oldToken);
+    data["users"]["dave"]["createdAt"] = "2026-01-01T00:00:00.000Z";
+    syncserver::atomicWriteFile(dir / "users.json", data.toStyledString());
+
+    syncserver::UserStore users(dir);
+    auto identity = users.authenticate(oldToken);
+    REQUIRE(identity.has_value());
+    CHECK(identity->user == "dave");
+    CHECK(identity->deviceId == "legacy");
+
+    // It can be revoked like any other device once the others have their own tokens
+    users.addDevice("dave", "laptop");
+    CHECK(users.listDevices("dave").size() == 2);
+    CHECK(users.revokeDevice("dave", "legacy"));
+    CHECK(!users.authenticate(oldToken).has_value());
+    fs::remove_all(dir);
+}
+
 int main(int argc, char** argv)
 {
     g_dataDir = fs::temp_directory_path() / ("kpxc-sync-test-" + utils::getUuid());
     fs::create_directories(g_dataDir);
 
     syncserver::UserStore users(g_dataDir);
-    g_aliceToken = users.setUser("alice");
-    g_bobToken = users.setUser("bob");
+    g_aliceToken = users.addUser("alice", "laptop");
+    g_bobToken = users.addUser("bob", "laptop");
 
     syncserver::Config config;
     config.dataDir = g_dataDir;

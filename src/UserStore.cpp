@@ -4,6 +4,7 @@
 
 #include <drogon/utils/Utilities.h>
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace fs = std::filesystem;
@@ -19,6 +20,53 @@ namespace syncserver
                 throw std::runtime_error("Cannot generate a random token");
             }
             return drogon::utils::base64EncodeUnpadded(bytes, sizeof(bytes), true);
+        }
+
+        std::string generateDeviceId()
+        {
+            unsigned char bytes[6];
+            if (!drogon::utils::secureRandomBytes(bytes, sizeof(bytes))) {
+                throw std::runtime_error("Cannot generate a device id");
+            }
+            return "d-" + drogon::utils::binaryStringToHex(bytes, sizeof(bytes), true);
+        }
+
+        void validateDeviceName(const std::string& name)
+        {
+            const bool printable = std::all_of(name.begin(), name.end(), [](unsigned char c) { return c >= 0x20; });
+            if (name.empty() || name.size() > 64 || !printable) {
+                throw std::invalid_argument("Invalid device name (1 to 64 characters, no control characters)");
+            }
+        }
+
+        Json::Value newDevice(const std::string& name, const std::string& token)
+        {
+            Json::Value device;
+            device["name"] = name;
+            device["tokenHash"] = sha256Hex(token);
+            device["createdAt"] = isoTimestamp();
+            device["lastSeenAt"] = "";
+            return device;
+        }
+
+        // Files from before devices existed: one token per user, kept as a device called "legacy"
+        void migrateUsers(Json::Value& users)
+        {
+            for (const auto& name : users.getMemberNames()) {
+                auto& user = users[name];
+                if (!user["devices"].isObject()) {
+                    user["devices"] = Json::objectValue;
+                }
+                if (user.isMember("tokenHash")) {
+                    Json::Value device;
+                    device["name"] = "legacy";
+                    device["tokenHash"] = user["tokenHash"];
+                    device["createdAt"] = user["createdAt"];
+                    device["lastSeenAt"] = "";
+                    user["devices"]["legacy"] = device;
+                    user.removeMember("tokenHash");
+                }
+            }
         }
 
         std::string toJsonString(const Json::Value& value)
@@ -59,6 +107,7 @@ namespace syncserver
             if (!data["users"].isObject()) {
                 data["users"] = Json::objectValue;
             }
+            migrateUsers(data["users"]);
             m_cache = std::move(data);
             m_cacheMtime = mtime;
         }
@@ -72,7 +121,12 @@ namespace syncserver
         m_cache.reset();
     }
 
-    std::optional<std::string> UserStore::authenticate(const std::string& token)
+    void UserStore::setLastSeenInterval(std::chrono::seconds interval)
+    {
+        m_lastSeenInterval = interval;
+    }
+
+    std::optional<Identity> UserStore::authenticate(const std::string& token)
     {
         if (token.empty()) {
             return std::nullopt;
@@ -80,29 +134,49 @@ namespace syncserver
         auto candidate = sha256Hex(token);
 
         std::lock_guard lock(m_mutex);
-        auto users = readLocked()["users"];
-        std::optional<std::string> match;
-        // Compare against every user, each comparison in constant time
-        for (const auto& name : users.getMemberNames()) {
-            if (constantTimeEquals(users[name]["tokenHash"].asString(), candidate)) {
-                match = name;
+        auto data = readLocked();
+        auto& users = data["users"];
+        std::optional<Identity> match;
+        // Compare against every device of every user, each comparison in constant time
+        for (const auto& user : users.getMemberNames()) {
+            auto& devices = users[user]["devices"];
+            for (const auto& id : devices.getMemberNames()) {
+                if (constantTimeEquals(devices[id]["tokenHash"].asString(), candidate)) {
+                    match = Identity{user, id};
+                }
+            }
+        }
+
+        // ISO timestamps in UTC sort like the times they stand for
+        if (match) {
+            auto& device = users[match->user]["devices"][match->deviceId];
+            auto staleBefore = isoTimestamp(std::chrono::system_clock::now() - m_lastSeenInterval);
+            if (device["lastSeenAt"].asString() < staleBefore) {
+                device["lastSeenAt"] = isoTimestamp();
+                writeLocked(data);
             }
         }
         return match;
     }
 
-    std::string UserStore::setUser(const std::string& name)
+    std::string UserStore::addUser(const std::string& name, const std::string& deviceName)
     {
         if (!isValidName(name)) {
             throw std::invalid_argument("Invalid user name \"" + name
                                         + "\" (allowed: letters, digits, \".\", \"_\", \"-\"; max 64 chars)");
         }
+        validateDeviceName(deviceName);
         std::lock_guard lock(m_mutex);
         auto data = readLocked();
-        auto token = generateToken();
+        if (data["users"].isMember(name)) {
+            throw std::invalid_argument("User \"" + name + "\" already exists. Add a device with: devices add " + name
+                                        + " <device-name>");
+        }
         Json::Value user;
-        user["tokenHash"] = sha256Hex(token);
         user["createdAt"] = isoTimestamp();
+        user["devices"] = Json::objectValue;
+        auto token = generateToken();
+        user["devices"][generateDeviceId()] = newDevice(deviceName, token);
         data["users"][name] = user;
         writeLocked(data);
         return token;
@@ -126,5 +200,55 @@ namespace syncserver
         auto names = readLocked()["users"].getMemberNames();
         std::sort(names.begin(), names.end());
         return names;
+    }
+
+    std::pair<std::string, std::string> UserStore::addDevice(const std::string& user, const std::string& deviceName)
+    {
+        validateDeviceName(deviceName);
+        std::lock_guard lock(m_mutex);
+        auto data = readLocked();
+        if (!data["users"].isMember(user)) {
+            throw std::invalid_argument("No such user: " + user);
+        }
+        auto id = generateDeviceId();
+        auto token = generateToken();
+        data["users"][user]["devices"][id] = newDevice(deviceName, token);
+        writeLocked(data);
+        return {id, token};
+    }
+
+    bool UserStore::revokeDevice(const std::string& user, const std::string& deviceId)
+    {
+        std::lock_guard lock(m_mutex);
+        auto data = readLocked();
+        // Check before indexing: operator[] would create the user
+        if (!data["users"].isMember(user) || !data["users"][user]["devices"].isMember(deviceId)) {
+            return false;
+        }
+        data["users"][user]["devices"].removeMember(deviceId);
+        writeLocked(data);
+        return true;
+    }
+
+    std::vector<Device> UserStore::listDevices(const std::string& user)
+    {
+        std::lock_guard lock(m_mutex);
+        auto data = readLocked();
+        if (!data["users"].isMember(user)) {
+            throw std::invalid_argument("No such user: " + user);
+        }
+        const auto& devices = data["users"][user]["devices"];
+        std::vector<Device> result;
+        for (const auto& id : devices.getMemberNames()) {
+            const auto& device = devices[id];
+            result.push_back({id,
+                              device["name"].asString(),
+                              device["createdAt"].asString(),
+                              device["lastSeenAt"].asString()});
+        }
+        std::sort(result.begin(), result.end(), [](const Device& a, const Device& b) {
+            return a.createdAt < b.createdAt;
+        });
+        return result;
     }
 } // namespace syncserver
