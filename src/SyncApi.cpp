@@ -229,6 +229,11 @@ namespace syncserver
 
             std::string authenticate(const HttpRequestPtr& req)
             {
+                return identify(req).user;
+            }
+
+            Identity identify(const HttpRequestPtr& req)
+            {
                 // Authorization: Bearer <token>
                 const auto& header = req->getHeader("Authorization");
                 std::optional<Identity> identity;
@@ -246,7 +251,51 @@ namespace syncserver
                 if (!identity) {
                     throw HttpError(k401Unauthorized, "Missing or invalid access token.");
                 }
-                return identity->user;
+                return *identity;
+            }
+
+            // POST /api/v1/devices/pairing: a code another device of the same user can claim
+            HttpResponsePtr createPairing(const HttpRequestPtr& req)
+            {
+                auto identity = identify(req);
+                auto pairing = m_users.createPairingCode(identity.user, identity.deviceId);
+                Json::Value body;
+                body["code"] = pairing.code;
+                body["expiresAt"] = pairing.expiresAt;
+                return jsonResponse(k201Created, body);
+            }
+
+            // POST /api/v1/devices/pairing/claim {"code": "...", "deviceName": "..."}: no token
+            // needed, the code is the credential; answers with the new device's token
+            HttpResponsePtr claimPairing(const HttpRequestPtr& req)
+            {
+                const auto client = req->peerAddr().toIp();
+                if (auto wait = m_pairingFailures.retryAfter(client)) {
+                    auto resp = errorResponse(k429TooManyRequests, "Too many wrong pairing codes. Try again later.");
+                    resp->addHeader("Retry-After", std::to_string(wait));
+                    return resp;
+                }
+
+                auto json = req->getJsonObject();
+                if (!json || !(*json)["code"].isString() || !(*json)["deviceName"].isString()) {
+                    throw HttpError(k400BadRequest, "Expected {\"code\": \"...\", \"deviceName\": \"...\"}.");
+                }
+                std::optional<PairedDevice> device;
+                try {
+                    device =
+                        m_users.claimPairingCode((*json)["code"].asString(), trim((*json)["deviceName"].asString()));
+                } catch (const std::invalid_argument& e) {
+                    throw HttpError(k400BadRequest, std::string(e.what()) + ".");
+                }
+                if (!device) {
+                    m_pairingFailures.recordFailure(client);
+                    throw HttpError(k400BadRequest, "Unknown or expired pairing code.");
+                }
+                Json::Value body;
+                body["user"] = device->user;
+                body["deviceId"] = device->deviceId;
+                body["token"] = device->token;
+                return jsonResponse(k201Created, body);
             }
 
             static void validateId(const std::string& id)
@@ -397,6 +446,9 @@ namespace syncserver
             }
 
         private:
+            // Codes have 40 bits; ten wrong guesses per address and a hundred in all per ten
+            // minutes leave no time to find one before it expires
+            FailureLimiter m_pairingFailures{10, 100, std::chrono::minutes(10)};
             UserStore m_users;
             DatabaseStore m_store;
             std::shared_ptr<EventHub> m_events;
@@ -452,6 +504,20 @@ namespace syncserver
                 respond(callback, [&] { return api->list(req); });
             },
             {Get});
+
+        app.registerHandler(
+            "/api/v1/devices/pairing",
+            [api](const HttpRequestPtr& req, Callback&& callback) {
+                respond(callback, [&] { return api->createPairing(req); });
+            },
+            {Post});
+
+        app.registerHandler(
+            "/api/v1/devices/pairing/claim",
+            [api](const HttpRequestPtr& req, Callback&& callback) {
+                respond(callback, [&] { return api->claimPairing(req); });
+            },
+            {Post});
 
         app.registerHandler(
             "/api/v1/events",

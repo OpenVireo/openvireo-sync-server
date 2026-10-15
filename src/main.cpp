@@ -21,6 +21,8 @@ User commands:
 
 Device commands (each device has its own access token):
   devices add <user> <device-name>   Add a device and print its access token
+  devices pair <user>                Print a one-time code that adds a device when entered in KeePassXC
+                                     instead of a token (valid for 10 minutes)
   devices list <user>                List a user's devices
   devices revoke <user> <device-id>  Revoke a device; its token stops working at once
 
@@ -69,6 +71,13 @@ Uses SYNC_DATA_DIR (default: ./data) to locate users.json.)";
             auto [id, token] = users.addDevice(args[1], args[2]);
             printToken(args[1], args[2], token);
             std::cout << "Device id: " << id << "\n";
+            return 0;
+        }
+        if (command == "pair" && args.size() == 2) {
+            auto pairing = users.createPairingCode(args[1]);
+            std::cout << "Pairing code for a new device of \"" << args[1]
+                      << "\" (enter it in KeePassXC instead of an access token):\n\n  " << pairing.code
+                      << "\n\nIt works once, until " << pairing.expiresAt << ". The running server accepts it.\n";
             return 0;
         }
         if (command == "list" && args.size() == 2) {

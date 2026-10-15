@@ -9,10 +9,12 @@
 #include <ctime>
 #include <fcntl.h>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
 #include <unistd.h>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -147,5 +149,52 @@ namespace syncserver
         if (fs::create_directories(dir)) {
             fs::permissions(dir, fs::perms::owner_all, fs::perm_options::replace);
         }
+    }
+
+    FailureLimiter::FailureLimiter(std::size_t perKey, std::size_t total, std::chrono::seconds window)
+        : m_perKey(perKey)
+        , m_total(total)
+        , m_window(window)
+    {
+    }
+
+    void FailureLimiter::dropOld(Clock::time_point now)
+    {
+        while (!m_failures.empty() && m_failures.front().first + m_window <= now) {
+            m_failures.pop_front();
+        }
+    }
+
+    long long FailureLimiter::retryAfter(const std::string& key, Clock::time_point now)
+    {
+        std::lock_guard lock(m_mutex);
+        dropOld(now);
+        // The failure whose expiry brings the count back under the limit
+        std::optional<Clock::time_point> until;
+        if (m_failures.size() >= m_total) {
+            until = m_failures[m_failures.size() - m_total].first;
+        }
+        std::vector<Clock::time_point> forKey;
+        for (const auto& [time, failedKey] : m_failures) {
+            if (failedKey == key) {
+                forKey.push_back(time);
+            }
+        }
+        if (forKey.size() >= m_perKey) {
+            auto keyUntil = forKey[forKey.size() - m_perKey];
+            until = until ? std::max(*until, keyUntil) : keyUntil;
+        }
+        if (!until) {
+            return 0;
+        }
+        auto wait = std::chrono::duration_cast<std::chrono::seconds>(*until + m_window - now).count();
+        return std::max<long long>(wait, 1);
+    }
+
+    void FailureLimiter::recordFailure(const std::string& key, Clock::time_point now)
+    {
+        std::lock_guard lock(m_mutex);
+        dropOld(now);
+        m_failures.emplace_back(now, key);
     }
 } // namespace syncserver
