@@ -159,7 +159,7 @@ namespace syncserver
             {
                 // Authorization: Bearer <token>
                 const auto& header = req->getHeader("Authorization");
-                std::optional<std::string> user;
+                std::optional<Identity> identity;
                 auto space = header.find_first_of(" \t");
                 if (space != std::string::npos) {
                     auto scheme = header.substr(0, space);
@@ -168,13 +168,13 @@ namespace syncserver
                     });
                     auto token = trim(std::string_view(header).substr(space));
                     if (scheme == "bearer" && token.find_first_of(" \t") == std::string::npos) {
-                        user = m_users.authenticate(token);
+                        identity = m_users.authenticate(token);
                     }
                 }
-                if (!user) {
+                if (!identity) {
                     throw HttpError(k401Unauthorized, "Missing or invalid access token.");
                 }
-                return *user;
+                return identity->user;
             }
 
             static void validateId(const std::string& id)

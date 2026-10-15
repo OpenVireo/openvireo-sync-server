@@ -13,7 +13,7 @@ brew install drogon            # or: apt install libdrogon-dev, vcpkg install dr
 cd sync_server
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/keepassxc-sync-server users add alice   # prints an access token, shown only once
+./build/keepassxc-sync-server users add alice laptop   # prints laptop's access token, shown only once
 ./build/keepassxc-sync-server                   # http://127.0.0.1:8787
 ```
 
@@ -23,7 +23,8 @@ Then in KeePassXC:
 2. Enter a name, set **Type** to *KeePassXC Sync Server*, and fill in:
    - **Server URL**: `http://127.0.0.1:8787`, or your `https://` URL
    - **Database ID**: any name, e.g. `personal`
-   - **Access token**: the token printed by `add-user`
+   - **Access token**: the token printed for this device. It is kept on this device only (in the Keychain on
+     macOS), not in the database
 3. Click **Test Connection**, then **Save**, then **OK**.
 4. Use **Database → Remote Sync → <name>** to sync.
 
@@ -33,10 +34,17 @@ Other devices use the same Database ID. If a device's copy uses a different pass
 
 ### Setting up another device
 
+Every device has its own access token, so one lost device can be shut out without touching the others. Create one
+for the new device first:
+
+```sh
+./build/keepassxc-sync-server devices add alice phone   # prints phone's access token
+```
+
 To get the database onto a new device:
 
 1. Use **Database → Import…** and choose *KeePassXC Sync Server (.kdbx)*.
-2. Enter the server URL and access token, then click **Load** to pick a database, or type its ID.
+2. Enter the server URL and the new device's access token, then click **Load** to pick a database, or type its ID.
 3. Enter the database's password and/or key file.
 4. Choose where to import it:
    - **Local Copy** opens the server database unchanged (same password) and asks where to save it. It is already linked to the server, so **Remote Sync** works right away.
@@ -68,19 +76,37 @@ sync.example.com {
 
 KeePassXC does not follow redirects, so the token is never forwarded to another host. Enter the final `https://` URL.
 
-## User management
+## Users and devices
 
 ```sh
-./build/keepassxc-sync-server users add <name>      # create a user, or rotate their token
+./build/keepassxc-sync-server users add <name> [device-name]     # create a user with a first device
 ./build/keepassxc-sync-server users remove <name>
 ./build/keepassxc-sync-server users list
+
+./build/keepassxc-sync-server devices add <user> <device-name>   # a new device and its access token
+./build/keepassxc-sync-server devices list <user>                # ids, names, when each was last seen
+./build/keepassxc-sync-server devices revoke <user> <device-id>  # its token stops working at once
 ```
 
-Each user has their own namespace and cannot see other users' databases. Only SHA-256 hashes of tokens are stored, in `data/users.json`. Changes to that file take effect without a restart.
+Each user has their own namespace and cannot see other users' databases. All of a user's devices see the same
+databases. Only SHA-256 hashes of tokens are stored, in `data/users.json`. Changes to that file take effect without a
+restart.
+
+A device was lost? Revoke it. Its token can no longer reach the server. If whoever has it may also know the
+database's password, change that password too, so copies uploaded from now on can't be opened with the old one.
+
+### Upgrading from one token per user
+
+Tokens from before devices existed keep working, as a device called `legacy` that all your devices share. Older
+KeePassXC versions also stored that token inside the database. To move to per-device tokens:
+
+1. `devices add <user> <device-name>` for each device, and enter each token in that device's Remote Sync settings.
+   Saving the settings also removes the old token from the database.
+2. `devices revoke <user> legacy`.
 
 ## API
 
-All endpoints except `/health` need `Authorization: Bearer <token>`. Errors are JSON: `{ "error": "..." }`.
+All endpoints except `/health` need `Authorization: Bearer <token>`, with the token of one of the user's devices. Errors are JSON: `{ "error": "..." }`.
 
 | Method | Path | Description |
 |---|---|---|

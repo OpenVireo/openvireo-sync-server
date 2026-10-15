@@ -1,7 +1,7 @@
 #pragma once
 
 #include <json/json.h>
-
+#include <chrono>
 #include <filesystem>
 #include <mutex>
 #include <optional>
@@ -10,23 +10,54 @@
 
 namespace syncserver
 {
+    struct Device
+    {
+        std::string id;
+        std::string name;
+        std::string createdAt;
+        // Empty until the device first connects
+        std::string lastSeenAt;
+    };
+
+    // Who sent a request: the user owns the databases, the device holds the token
+    struct Identity
+    {
+        std::string user;
+        std::string deviceId;
+    };
+
     /**
-     * Users live in <dataDir>/users.json as { "users": { "<name>": { "tokenHash": "<sha256 hex>" } } }.
+     * Users and their devices live in <dataDir>/users.json as
+     *   { "users": { "<name>": { "createdAt": "...",
+     *                            "devices": { "<id>": { "name": "...", "tokenHash": "<sha256 hex>",
+     *                                                   "createdAt": "...", "lastSeenAt": "..." } } } } }
+     *
+     * Every device has its own token, so one lost device can be revoked without touching the others.
      * Only token hashes are stored; the plain token is shown once when it is created.
-     * The file is re-read when it changes, so users can be added without a restart.
+     * The file is re-read when it changes, so changes take effect without a restart.
+     *
+     * Files from before devices existed have one "tokenHash" per user; that token keeps working
+     * as a device called "legacy".
      */
     class UserStore
     {
     public:
         explicit UserStore(const std::filesystem::path& dataDir);
 
-        // Returns the user name that owns the token
-        std::optional<std::string> authenticate(const std::string& token);
+        // Also records when the device was last seen, at most once per lastSeenInterval
+        std::optional<Identity> authenticate(const std::string& token);
 
-        // Creates the user or rotates its token. Returns the new plain token.
-        std::string setUser(const std::string& name);
+        // Creates a user with a first device and returns that device's token
+        std::string addUser(const std::string& name, const std::string& deviceName);
         bool removeUser(const std::string& name);
         std::vector<std::string> listUsers();
+
+        // Returns the new device's id and token
+        std::pair<std::string, std::string> addDevice(const std::string& user, const std::string& deviceName);
+        bool revokeDevice(const std::string& user, const std::string& deviceId);
+        std::vector<Device> listDevices(const std::string& user);
+
+        void setLastSeenInterval(std::chrono::seconds interval);
 
     private:
         Json::Value readLocked();
@@ -36,5 +67,6 @@ namespace syncserver
         std::mutex m_mutex;
         std::optional<Json::Value> m_cache;
         std::filesystem::file_time_type m_cacheMtime;
+        std::chrono::seconds m_lastSeenInterval = std::chrono::hours(1);
     };
 } // namespace syncserver
