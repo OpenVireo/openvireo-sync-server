@@ -115,6 +115,9 @@ All endpoints except `/health` need `Authorization: Bearer <token>`, with the to
 | `GET` / `HEAD` | `/api/v1/databases/{id}` | Download a database. Supports `If-None-Match` (returns `304`) |
 | `PUT` | `/api/v1/databases/{id}` | Upload a database (raw `.kdbx` body) |
 | `DELETE` | `/api/v1/databases/{id}` | Delete a database and its history. Supports `If-Match` |
+| `GET` | `/api/v1/databases/{id}/history` | The current and kept previous versions, newest first (`revision`, `etag`, `size`, `updatedAt`) |
+| `GET` | `/api/v1/databases/{id}/history/{revision}` | Download one of those versions |
+| `GET` | `/api/v1/events` | Change notifications as server-sent events (see below) |
 
 `{id}` may contain letters, digits, `.`, `_` and `-`, up to 64 characters.
 
@@ -132,7 +135,26 @@ Uploads must start with the KDBX file signature (`415` otherwise). Uploads over 
 
 ### History
 
-Before each overwrite, the previous version is copied to `data/databases/<user>/.history/<id>/<revision>.kdbx`. The newest `SYNC_HISTORY_SIZE` versions are kept. To roll back, copy one over manually.
+Before each overwrite, the previous version is copied to `data/databases/<user>/.history/<id>/<revision>.kdbx`, with
+its metadata next to it in `<revision>.json`. The newest `SYNC_HISTORY_SIZE` versions are kept.
+
+In KeePassXC, **Database → Remote Sync → Versions on <name>…** lists them. Opening one downloads it and shows it in
+its own tab, where you can copy entries from it or merge it into your database. Nothing on the server changes.
+
+### Change notifications
+
+`GET /api/v1/events` stays open and sends a server-sent event to all of a user's connected devices after every change
+to one of their databases:
+
+```
+event: database
+data: {"id":"personal","etag":"\"…\"","revision":12}
+```
+
+A deleted database sends `{"id":"personal","deleted":true}`. A comment line (`: ping`) every 25 seconds keeps idle
+connections open. KeePassXC listens while automatic sync is on, syncs as soon as another device uploads, and only polls
+every 5 minutes while it is connected (every minute otherwise). Behind a reverse proxy, make sure it doesn't buffer
+responses (the server sends `X-Accel-Buffering: no` for nginx) and allows long-lived requests.
 
 ## Tests
 
