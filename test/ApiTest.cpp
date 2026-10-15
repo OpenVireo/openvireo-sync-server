@@ -298,18 +298,22 @@ DROGON_TEST(ListsDevicesAndWhenTheyWereLastSeen)
     auto token = users.addUser("carol", "desktop");
     auto [tabletId, tabletToken] = users.addDevice("carol", "tablet");
 
-    auto devices = users.listDevices("carol");
-    REQUIRE(devices.size() == 2);
-    CHECK(devices[1].id == tabletId);
-    CHECK(devices[1].name == "tablet");
-    CHECK(devices[0].lastSeenAt.empty());
+    // Devices added in the same millisecond have no order, so look them up by name
+    auto device = [&](const std::string& name) {
+        auto devices = users.listDevices("carol");
+        auto it = std::find_if(devices.begin(), devices.end(), [&](const auto& d) { return d.name == name; });
+        return it != devices.end() ? *it : syncserver::Device{};
+    };
+    REQUIRE(users.listDevices("carol").size() == 2);
+    CHECK(device("tablet").id == tabletId);
+    CHECK(device("desktop").lastSeenAt.empty());
 
     auto identity = users.authenticate(token);
     REQUIRE(identity.has_value());
     CHECK(identity->user == "carol");
-    CHECK(identity->deviceId == devices[0].id);
-    CHECK(!users.listDevices("carol")[0].lastSeenAt.empty());
-    CHECK(users.listDevices("carol")[1].lastSeenAt.empty());
+    CHECK(identity->deviceId == device("desktop").id);
+    CHECK(!device("desktop").lastSeenAt.empty());
+    CHECK(device("tablet").lastSeenAt.empty());
 
     CHECK_THROWS(users.addUser("carol", "again"));
     CHECK_THROWS(users.addDevice("carol", ""));
