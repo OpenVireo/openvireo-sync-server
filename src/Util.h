@@ -1,7 +1,10 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
+#include <deque>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -23,4 +26,29 @@ namespace syncserver
     void atomicWriteFile(const std::filesystem::path& file, std::string_view contents);
     // Creates the directory and any missing parents with mode 0700
     void ensurePrivateDirectory(const std::filesystem::path& dir);
+
+    /**
+     * Counts failures per key (e.g. client address) and in total within a sliding window, so
+     * guessing short secrets such as pairing codes stays slow even from many addresses.
+     */
+    class FailureLimiter
+    {
+    public:
+        using Clock = std::chrono::steady_clock;
+
+        FailureLimiter(std::size_t perKey, std::size_t total, std::chrono::seconds window);
+
+        // Seconds until another attempt is allowed, 0 when it is allowed now
+        long long retryAfter(const std::string& key, Clock::time_point now = Clock::now());
+        void recordFailure(const std::string& key, Clock::time_point now = Clock::now());
+
+    private:
+        void dropOld(Clock::time_point now);
+
+        std::size_t m_perKey;
+        std::size_t m_total;
+        std::chrono::seconds m_window;
+        std::mutex m_mutex;
+        std::deque<std::pair<Clock::time_point, std::string>> m_failures;
+    };
 } // namespace syncserver

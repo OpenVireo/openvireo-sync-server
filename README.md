@@ -24,7 +24,7 @@ Then in KeePassXC:
    - **Server URL**: `http://127.0.0.1:8787`, or your `https://` URL
    - **Database ID**: any name, e.g. `personal`
    - **Access token**: the token printed for this device. It is kept on this device only (in the Keychain on
-     macOS), not in the database
+     macOS, the Credential Manager on Windows, the desktop keyring on Linux), not in the database
 3. Click **Test Connection**, then **Save**, then **OK**.
 4. Use **Database → Remote Sync → <name>** to sync.
 
@@ -34,17 +34,23 @@ Other devices use the same Database ID. If a device's copy uses a different pass
 
 ### Setting up another device
 
-Every device has its own access token, so one lost device can be shut out without touching the others. Create one
-for the new device first:
+Every device has its own access token, so one lost device can be shut out without touching the others. The easiest
+way to give the new device one is a pairing code: on a device that already syncs, open **Remote Sync** in the
+database settings, select the sync server and click **Pair Device…**. Or on the server:
 
 ```sh
-./build/keepassxc-sync-server devices add alice phone   # prints phone's access token
+./build/keepassxc-sync-server devices pair alice   # prints a code such as WJDA-247W
 ```
+
+On the new device, enter the code where KeePassXC asks for the access token. It trades the code for a token of its
+own, named after the computer. A code adds one device and works for 10 minutes. If you'd rather copy a token by hand,
+`devices add alice phone` prints one.
 
 To get the database onto a new device:
 
 1. Use **Database → Import…** and choose *KeePassXC Sync Server (.kdbx)*.
-2. Enter the server URL and the new device's access token, then click **Load** to pick a database, or type its ID.
+2. Enter the server URL and a pairing code (or the new device's access token), then click **Load** to pick a database,
+   or type its ID.
 3. Enter the database's password and/or key file.
 4. Choose where to import it:
    - **Local Copy** opens the server database unchanged (same password) and asks where to save it. It is already linked to the server, so **Remote Sync** works right away.
@@ -84,12 +90,13 @@ KeePassXC does not follow redirects, so the token is never forwarded to another 
 ./build/keepassxc-sync-server users list
 
 ./build/keepassxc-sync-server devices add <user> <device-name>   # a new device and its access token
+./build/keepassxc-sync-server devices pair <user>                # a one-time code a new device trades for a token
 ./build/keepassxc-sync-server devices list <user>                # ids, names, when each was last seen
 ./build/keepassxc-sync-server devices revoke <user> <device-id>  # its token stops working at once
 ```
 
 Each user has their own namespace and cannot see other users' databases. All of a user's devices see the same
-databases. Only SHA-256 hashes of tokens are stored, in `data/users.json`. Changes to that file take effect without a
+databases. Only SHA-256 hashes of tokens and pairing codes are stored, in `data/users.json`. Changes to that file take effect without a
 restart.
 
 A device was lost? Revoke it. Its token can no longer reach the server. If whoever has it may also know the
@@ -106,7 +113,7 @@ KeePassXC versions also stored that token inside the database. To move to per-de
 
 ## API
 
-All endpoints except `/health` need `Authorization: Bearer <token>`, with the token of one of the user's devices. Errors are JSON: `{ "error": "..." }`.
+All endpoints except `/health` and the pairing claim need `Authorization: Bearer <token>`, with the token of one of the user's devices. Errors are JSON: `{ "error": "..." }`.
 
 | Method | Path | Description |
 |---|---|---|
@@ -118,8 +125,18 @@ All endpoints except `/health` need `Authorization: Bearer <token>`, with the to
 | `GET` | `/api/v1/databases/{id}/history` | The current and kept previous versions, newest first (`revision`, `etag`, `size`, `updatedAt`) |
 | `GET` | `/api/v1/databases/{id}/history/{revision}` | Download one of those versions |
 | `GET` | `/api/v1/events` | Change notifications as server-sent events (see below) |
+| `POST` | `/api/v1/devices/pairing` | A pairing code for another device of the same user: `201 { "code", "expiresAt" }` |
+| `POST` | `/api/v1/devices/pairing/claim` | No token. `{ "code", "deviceName" }` → `201 { "user", "deviceId", "token" }` (see below) |
 
 `{id}` may contain letters, digits, `.`, `_` and `-`, up to 64 characters.
+
+### Pairing
+
+A pairing code is eight letters and digits (no `0`/`O` or `1`/`I`), shown as `ABCD-EFGH`; case, spaces and the dash
+don't matter when claiming. It works once and for 10 minutes, and a user has at most 5 waiting (a new one replaces the
+oldest). Wrong codes are limited to 10 per client address and 100 in all per 10 minutes, after which claims get `429`
+with `Retry-After`. Behind a reverse proxy every client has the proxy's address, so the per-address limit applies to
+everyone together.
 
 ### Concurrency
 

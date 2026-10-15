@@ -5,6 +5,7 @@
 #include <drogon/utils/Utilities.h>
 
 #include <algorithm>
+#include <cctype>
 #include <stdexcept>
 
 namespace fs = std::filesystem;
@@ -29,6 +30,46 @@ namespace syncserver
                 throw std::runtime_error("Cannot generate a device id");
             }
             return "d-" + drogon::utils::binaryStringToHex(bytes, sizeof(bytes), true);
+        }
+
+        // No 0/O or 1/I, which are easy to mix up when reading a code off another screen
+        constexpr std::string_view PAIRING_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        constexpr std::size_t PAIRING_CODE_LENGTH = 8;
+
+        std::string generatePairingCode()
+        {
+            unsigned char bytes[PAIRING_CODE_LENGTH];
+            if (!drogon::utils::secureRandomBytes(bytes, sizeof(bytes))) {
+                throw std::runtime_error("Cannot generate a pairing code");
+            }
+            std::string code;
+            for (auto byte : bytes) {
+                // 256 is a multiple of the alphabet's 32 letters, so every letter is equally likely
+                code += PAIRING_ALPHABET[byte % PAIRING_ALPHABET.size()];
+            }
+            return code;
+        }
+
+        // Drops a user's expired codes; returns whether any were dropped
+        bool dropExpiredPairings(Json::Value& user)
+        {
+            auto& pairings = user["pairings"];
+            if (!pairings.isObject()) {
+                user.removeMember("pairings");
+                return false;
+            }
+            const auto now = isoTimestamp();
+            bool dropped = false;
+            for (const auto& hash : pairings.getMemberNames()) {
+                if (pairings[hash]["expiresAt"].asString() <= now) {
+                    pairings.removeMember(hash);
+                    dropped = true;
+                }
+            }
+            if (pairings.empty()) {
+                user.removeMember("pairings");
+            }
+            return dropped;
         }
 
         void validateDeviceName(const std::string& name)
@@ -157,6 +198,96 @@ namespace syncserver
             }
         }
         return match;
+    }
+
+    void UserStore::setPairingLifetime(std::chrono::seconds lifetime)
+    {
+        m_pairingLifetime = lifetime;
+    }
+
+    std::string UserStore::normalizePairingCode(std::string_view code)
+    {
+        std::string normalized;
+        for (unsigned char c : code) {
+            if (c == '-' || std::isspace(c)) {
+                continue;
+            }
+            normalized += static_cast<char>(std::toupper(c));
+        }
+        return normalized;
+    }
+
+    PairingCode UserStore::createPairingCode(const std::string& user, const std::string& createdBy)
+    {
+        std::lock_guard lock(m_mutex);
+        auto data = readLocked();
+        if (!data["users"].isMember(user)) {
+            throw std::invalid_argument("No such user: " + user);
+        }
+        auto& entry = data["users"][user];
+        dropExpiredPairings(entry);
+
+        // Keep a user's waiting codes few, dropping the ones that expire first
+        auto& pairings = entry["pairings"];
+        while (pairings.isObject() && pairings.size() >= MaxPairingsPerUser) {
+            auto names = pairings.getMemberNames();
+            auto oldest = *std::min_element(names.begin(), names.end(), [&](const auto& a, const auto& b) {
+                return pairings[a]["expiresAt"].asString() < pairings[b]["expiresAt"].asString();
+            });
+            pairings.removeMember(oldest);
+        }
+
+        auto code = generatePairingCode();
+        auto expiresAt = isoTimestamp(std::chrono::system_clock::now() + m_pairingLifetime);
+        Json::Value pairing;
+        pairing["expiresAt"] = expiresAt;
+        pairing["createdBy"] = createdBy;
+        entry["pairings"][sha256Hex(code)] = pairing;
+        writeLocked(data);
+        return {code.substr(0, 4) + "-" + code.substr(4), expiresAt};
+    }
+
+    std::optional<PairedDevice> UserStore::claimPairingCode(const std::string& code, const std::string& deviceName)
+    {
+        validateDeviceName(deviceName);
+        auto candidate = sha256Hex(normalizePairingCode(code));
+
+        std::lock_guard lock(m_mutex);
+        auto data = readLocked();
+        auto& users = data["users"];
+        bool changed = false;
+        std::optional<std::pair<std::string, std::string>> match;
+        for (const auto& name : users.getMemberNames()) {
+            auto& user = users[name];
+            changed = dropExpiredPairings(user) || changed;
+            if (!user.isMember("pairings")) {
+                continue;
+            }
+            auto& pairings = user["pairings"];
+            for (const auto& hash : pairings.getMemberNames()) {
+                if (constantTimeEquals(hash, candidate)) {
+                    match = {name, hash};
+                }
+            }
+        }
+        if (!match) {
+            if (changed) {
+                writeLocked(data);
+            }
+            return std::nullopt;
+        }
+
+        // Each code adds one device only
+        auto& user = users[match->first];
+        user["pairings"].removeMember(match->second);
+        if (user["pairings"].empty()) {
+            user.removeMember("pairings");
+        }
+        auto id = generateDeviceId();
+        auto token = generateToken();
+        user["devices"][id] = newDevice(deviceName, token);
+        writeLocked(data);
+        return PairedDevice{match->first, id, token};
     }
 
     std::string UserStore::addUser(const std::string& name, const std::string& deviceName)

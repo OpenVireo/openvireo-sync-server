@@ -65,6 +65,35 @@ namespace
         return resp;
     }
 
+    Json::Value json(const HttpResponsePtr& resp);
+
+    HttpResponsePtr postJson(const std::string& path, const Json::Value& body, const std::string& token = {})
+    {
+        auto client = HttpClient::newHttpClient(g_baseUrl);
+        auto req = HttpRequest::newHttpJsonRequest(body);
+        req->setMethod(Post);
+        req->setPath("/api/v1" + path);
+        if (!token.empty()) {
+            req->addHeader("Authorization", "Bearer " + token);
+        }
+        auto [result, resp] = client->sendRequest(req, 10);
+        if (result != ReqResult::Ok) {
+            throw std::runtime_error("request failed: " + to_string(result));
+        }
+        return resp;
+    }
+
+    Json::Value claim(const std::string& code, const std::string& deviceName = "phone")
+    {
+        Json::Value body;
+        body["code"] = code;
+        body["deviceName"] = deviceName;
+        auto resp = postJson("/devices/pairing/claim", body);
+        auto result = json(resp);
+        result["status"] = static_cast<int>(resp->statusCode());
+        return result;
+    }
+
     Json::Value json(const HttpResponsePtr& resp)
     {
         if (resp->contentType() != CT_APPLICATION_JSON) {
@@ -424,6 +453,105 @@ DROGON_TEST(StreamsChangesToTheOwnersDevices)
 
     EventStream stranger("not-a-token");
     CHECK(stranger.waitFor("401"));
+}
+
+DROGON_TEST(PairsADeviceWithAOneTimeCode)
+{
+    // Only a signed-in device can ask for a code
+    CHECK(postJson("/devices/pairing", Json::objectValue)->statusCode() == k401Unauthorized);
+
+    auto created = postJson("/devices/pairing", Json::objectValue, g_aliceToken);
+    REQUIRE(created->statusCode() == k201Created);
+    auto code = json(created)["code"].asString();
+    CHECK(code.size() == 9);
+    CHECK(code[4] == '-');
+    CHECK(!json(created)["expiresAt"].asString().empty());
+
+    // Typed by hand: lower case and without the dash still match
+    std::string typed = code.substr(0, 4) + " " + code.substr(5);
+    std::transform(typed.begin(), typed.end(), typed.begin(), [](unsigned char c) { return std::tolower(c); });
+    auto paired = claim(typed, "  work phone ");
+    REQUIRE(paired["status"].asInt() == k201Created);
+    CHECK(paired["user"].asString() == "alice");
+    auto token = paired["token"].asString();
+    CHECK(token.size() >= 40);
+    CHECK(request(Get, "/databases", {token})->statusCode() == k200OK);
+
+    syncserver::UserStore users(g_dataDir);
+    auto devices = users.listDevices("alice");
+    auto added = std::find_if(
+        devices.begin(), devices.end(), [&](const auto& d) { return d.id == paired["deviceId"].asString(); });
+    REQUIRE(added != devices.end());
+    CHECK(added->name == "work phone");
+
+    // A code adds one device only
+    CHECK(claim(code)["status"].asInt() == k400BadRequest);
+    CHECK(claim("AAAA-AAAA")["error"].asString() == "Unknown or expired pairing code.");
+
+    auto another = json(postJson("/devices/pairing", Json::objectValue, g_aliceToken))["code"].asString();
+    CHECK(claim(another, "")["status"].asInt() == k400BadRequest);
+    // A bad device name doesn't use up the code
+    CHECK(claim(another, "tablet")["status"].asInt() == k201Created);
+
+    Json::Value missing;
+    missing["code"] = another;
+    CHECK(postJson("/devices/pairing/claim", missing)->statusCode() == k400BadRequest);
+}
+
+DROGON_TEST(PairingCodesExpireAndStayFew)
+{
+    // Its own folder: tests run in parallel, and the server would write its copy of users.json over this one's
+    auto dataDir = fs::temp_directory_path() / ("kpxc-sync-pairing-" + utils::getUuid());
+    fs::create_directories(dataDir);
+    syncserver::UserStore users(dataDir);
+    users.addUser("bob", "laptop");
+    users.setPairingLifetime(std::chrono::seconds(-1));
+    auto expired = users.createPairingCode("bob");
+    CHECK(!users.claimPairingCode(expired.code, "late"));
+
+    users.setPairingLifetime(std::chrono::minutes(10));
+    std::vector<std::string> codes;
+    for (std::size_t i = 0; i < syncserver::UserStore::MaxPairingsPerUser + 1; ++i) {
+        codes.push_back(users.createPairingCode("bob").code);
+    }
+
+    // The codes themselves never reach the file
+    auto file = syncserver::readFile(dataDir / "users.json");
+    const auto newest = syncserver::UserStore::normalizePairingCode(codes.back());
+    CHECK(file.find(newest) == std::string::npos);
+    CHECK(file.find(syncserver::sha256Hex(newest)) != std::string::npos);
+
+    // One that expires first made room for the newest (codes made in the same millisecond tie)
+    CHECK(users.claimPairingCode(codes.back(), "last"));
+    std::size_t claimed = 1;
+    for (std::size_t i = 0; i + 1 < codes.size(); ++i) {
+        if (users.claimPairingCode(codes[i], "device " + std::to_string(i))) {
+            ++claimed;
+        }
+    }
+    CHECK(claimed == syncserver::UserStore::MaxPairingsPerUser);
+    CHECK_THROWS(users.createPairingCode("nobody"));
+    fs::remove_all(dataDir);
+}
+
+DROGON_TEST(LimitsFailuresPerClientAndInTotal)
+{
+    using namespace std::chrono_literals;
+    syncserver::FailureLimiter limiter(2, 3, 60s);
+    auto t0 = syncserver::FailureLimiter::Clock::time_point();
+    CHECK(limiter.retryAfter("a", t0) == 0);
+    limiter.recordFailure("a", t0);
+    limiter.recordFailure("a", t0 + 10s);
+    CHECK(limiter.retryAfter("a", t0 + 10s) == 50);
+    CHECK(limiter.retryAfter("b", t0 + 10s) == 0);
+    limiter.recordFailure("b", t0 + 20s);
+    // Three in all blocks everyone until the first one is a minute old
+    CHECK(limiter.retryAfter("c", t0 + 20s) == 40);
+    CHECK(limiter.retryAfter("c", t0 + 60s) == 0);
+    CHECK(limiter.retryAfter("a", t0 + 60s) == 0);
+    limiter.recordFailure("a", t0 + 60s);
+    CHECK(limiter.retryAfter("a", t0 + 60s) == 10);
+    CHECK(limiter.retryAfter("a", t0 + 70s) == 0);
 }
 
 int main(int argc, char** argv)
