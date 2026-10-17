@@ -2,11 +2,15 @@
 
 #include "Util.h"
 
-#include <drogon/utils/Utilities.h>
+#include <json/json.h>
+#include <sqlite3.h>
 
-#include <algorithm>
-#include <cctype>
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <cstdint>
 #include <stdexcept>
+#include <system_error>
 
 namespace fs = std::filesystem;
 
@@ -14,157 +18,311 @@ namespace syncserver
 {
     namespace
     {
-        std::string generateToken()
+        // Each migration is a list of statements. Append new ones; never change one that has shipped.
+        const std::vector<std::vector<const char*>> MIGRATIONS = {
+            {
+                R"(CREATE TABLE users (
+                       name        TEXT PRIMARY KEY,
+                       created_at  TEXT NOT NULL
+                   ))",
+                R"(CREATE TABLE devices (
+                       user_name     TEXT NOT NULL REFERENCES users(name) ON DELETE CASCADE,
+                       id            TEXT NOT NULL,
+                       name          TEXT NOT NULL,
+                       token_hash    TEXT NOT NULL UNIQUE,
+                       created_at    TEXT NOT NULL,
+                       last_seen_at  TEXT,
+                       PRIMARY KEY (user_name, id)
+                   ))",
+                R"(CREATE TABLE pairing_codes (
+                       code_hash   TEXT PRIMARY KEY,
+                       user_name   TEXT NOT NULL REFERENCES users(name) ON DELETE CASCADE,
+                       created_by  TEXT,
+                       created_at  TEXT NOT NULL,
+                       expires_at  TEXT NOT NULL
+                   ))",
+                "CREATE INDEX pairing_codes_user_name ON pairing_codes (user_name)",
+            },
+        };
+
+        // How long to wait for another process (the server or a command) to finish writing
+        constexpr int BUSY_TIMEOUT_MS = 10000;
+
+        [[noreturn]] void fail(sqlite3* db, const std::string& what)
         {
-            unsigned char bytes[32];
-            if (!drogon::utils::secureRandomBytes(bytes, sizeof(bytes))) {
-                throw std::runtime_error("Cannot generate a random token");
-            }
-            return drogon::utils::base64EncodeUnpadded(bytes, sizeof(bytes), true);
+            throw std::runtime_error(what + ": " + sqlite3_errmsg(db));
         }
 
-        std::string generateDeviceId()
+        void exec(sqlite3* db, const char* sql)
         {
-            unsigned char bytes[6];
-            if (!drogon::utils::secureRandomBytes(bytes, sizeof(bytes))) {
-                throw std::runtime_error("Cannot generate a device id");
+            if (sqlite3_exec(db, sql, nullptr, nullptr, nullptr) != SQLITE_OK) {
+                fail(db, sql);
             }
-            return "d-" + drogon::utils::binaryStringToHex(bytes, sizeof(bytes), true);
         }
 
-        // No 0/O or 1/I, which are easy to mix up when reading a code off another screen
-        constexpr std::string_view PAIRING_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-        constexpr std::size_t PAIRING_CODE_LENGTH = 8;
-
-        std::string generatePairingCode()
+        class Statement
         {
-            unsigned char bytes[PAIRING_CODE_LENGTH];
-            if (!drogon::utils::secureRandomBytes(bytes, sizeof(bytes))) {
-                throw std::runtime_error("Cannot generate a pairing code");
+        public:
+            template <typename... Args> Statement(sqlite3* db, const char* sql, const Args&... args)
+                : m_db(db)
+            {
+                if (sqlite3_prepare_v2(db, sql, -1, &m_stmt, nullptr) != SQLITE_OK) {
+                    fail(db, "Cannot prepare a query");
+                }
+                int index = 0;
+                (bind(++index, args), ...);
             }
-            std::string code;
-            for (auto byte : bytes) {
-                // 256 is a multiple of the alphabet's 32 letters, so every letter is equally likely
-                code += PAIRING_ALPHABET[byte % PAIRING_ALPHABET.size()];
+
+            ~Statement()
+            {
+                sqlite3_finalize(m_stmt);
             }
-            return code;
+
+            Statement(const Statement&) = delete;
+            Statement& operator=(const Statement&) = delete;
+
+            // Whether there is a row to read
+            bool step()
+            {
+                switch (sqlite3_step(m_stmt)) {
+                case SQLITE_ROW:
+                    return true;
+                case SQLITE_DONE:
+                    return false;
+                default:
+                    fail(m_db, "Cannot run a query");
+                }
+            }
+
+            // Runs a statement that returns no rows and returns how many rows it changed
+            int run()
+            {
+                while (step()) {
+                }
+                return sqlite3_changes(m_db);
+            }
+
+            // NULL reads as an empty string
+            std::string text(int column) const
+            {
+                auto text = sqlite3_column_text(m_stmt, column);
+                return text ? std::string(reinterpret_cast<const char*>(text), sqlite3_column_bytes(m_stmt, column))
+                            : std::string();
+            }
+
+        private:
+            void bind(int index, const std::string& value)
+            {
+                check(sqlite3_bind_text(m_stmt, index, value.data(), static_cast<int>(value.size()), SQLITE_TRANSIENT));
+            }
+
+            void bind(int index, const char* value)
+            {
+                bind(index, std::string(value));
+            }
+
+            void bind(int index, int64_t value)
+            {
+                check(sqlite3_bind_int64(m_stmt, index, value));
+            }
+
+            void check(int rc)
+            {
+                if (rc != SQLITE_OK) {
+                    fail(m_db, "Cannot bind a query parameter");
+                }
+            }
+
+            sqlite3* m_db;
+            sqlite3_stmt* m_stmt = nullptr;
+        };
+
+        // Takes the write lock at once, so two processes never both read and then both try to write.
+        // Rolls back unless committed.
+        class Transaction
+        {
+        public:
+            explicit Transaction(sqlite3* db)
+                : m_db(db)
+            {
+                exec(db, "BEGIN IMMEDIATE");
+            }
+
+            ~Transaction()
+            {
+                if (!m_done) {
+                    sqlite3_exec(m_db, "ROLLBACK", nullptr, nullptr, nullptr);
+                }
+            }
+
+            Transaction(const Transaction&) = delete;
+            Transaction& operator=(const Transaction&) = delete;
+
+            void commit()
+            {
+                exec(m_db, "COMMIT");
+                m_done = true;
+            }
+
+        private:
+            sqlite3* m_db;
+            bool m_done = false;
+        };
+
+        bool userExists(sqlite3* db, const std::string& name)
+        {
+            return Statement(db, "SELECT 1 FROM users WHERE name = ?", name).step();
         }
 
-        // Drops a user's expired codes; returns whether any were dropped
-        bool dropExpiredPairings(Json::Value& user)
+        void insertDevice(sqlite3* db, const StoredDevice& device, const std::string& user)
         {
-            auto& pairings = user["pairings"];
-            if (!pairings.isObject()) {
-                user.removeMember("pairings");
-                return false;
+            Statement(db,
+                      "INSERT INTO devices (id, user_name, name, token_hash, created_at, last_seen_at) "
+                      "VALUES (?, ?, ?, ?, ?, nullif(?, ''))",
+                      device.id,
+                      user,
+                      device.name,
+                      device.tokenHash,
+                      device.createdAt,
+                      device.lastSeenAt)
+                .run();
+        }
+
+        StoredDevice newDevice(const std::string& id, const std::string& name, const std::string& token)
+        {
+            return {id, name, sha256Hex(token), isoTimestamp(), {}};
+        }
+
+        // users.json as older servers wrote it, legacy per-user tokens turned into devices called "legacy".
+        // Pairing codes are left out: they are only valid for minutes.
+        std::vector<StoredUser> readUsersJson(const fs::path& file)
+        {
+            Json::Value data;
+            Json::CharReaderBuilder builder;
+            std::string errors;
+            auto text = readFile(file);
+            std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+            if (!reader->parse(text.data(), text.data() + text.size(), &data, &errors) || !data.isObject()) {
+                throw std::runtime_error("Invalid " + file.string() + ": " + errors);
+            }
+
+            std::vector<StoredUser> result;
+            const auto& users = data["users"];
+            if (!users.isObject()) {
+                return result;
             }
             const auto now = isoTimestamp();
-            bool dropped = false;
-            for (const auto& hash : pairings.getMemberNames()) {
-                if (pairings[hash]["expiresAt"].asString() <= now) {
-                    pairings.removeMember(hash);
-                    dropped = true;
-                }
-            }
-            if (pairings.empty()) {
-                user.removeMember("pairings");
-            }
-            return dropped;
-        }
-
-        void validateDeviceName(const std::string& name)
-        {
-            const bool printable = std::all_of(name.begin(), name.end(), [](unsigned char c) { return c >= 0x20; });
-            if (name.empty() || name.size() > 64 || !printable) {
-                throw std::invalid_argument("Invalid device name (1 to 64 characters, no control characters)");
-            }
-        }
-
-        Json::Value newDevice(const std::string& name, const std::string& token)
-        {
-            Json::Value device;
-            device["name"] = name;
-            device["tokenHash"] = sha256Hex(token);
-            device["createdAt"] = isoTimestamp();
-            device["lastSeenAt"] = "";
-            return device;
-        }
-
-        // Files from before devices existed: one token per user, kept as a device called "legacy"
-        void migrateUsers(Json::Value& users)
-        {
+            auto orNow = [&](const Json::Value& value) {
+                return value.asString().empty() ? now : value.asString();
+            };
             for (const auto& name : users.getMemberNames()) {
-                auto& user = users[name];
-                if (!user["devices"].isObject()) {
-                    user["devices"] = Json::objectValue;
-                }
+                const auto& user = users[name];
+                StoredUser stored{name, orNow(user["createdAt"]), {}};
                 if (user.isMember("tokenHash")) {
-                    Json::Value device;
-                    device["name"] = "legacy";
-                    device["tokenHash"] = user["tokenHash"];
-                    device["createdAt"] = user["createdAt"];
-                    device["lastSeenAt"] = "";
-                    user["devices"]["legacy"] = device;
-                    user.removeMember("tokenHash");
+                    stored.devices.push_back(
+                        {"legacy", "legacy", user["tokenHash"].asString(), stored.createdAt, {}});
                 }
+                const auto& devices = user["devices"];
+                if (devices.isObject()) {
+                    for (const auto& id : devices.getMemberNames()) {
+                        const auto& device = devices[id];
+                        stored.devices.push_back({id,
+                                                  device["name"].asString(),
+                                                  device["tokenHash"].asString(),
+                                                  orNow(device["createdAt"]),
+                                                  device["lastSeenAt"].asString()});
+                    }
+                }
+                result.push_back(std::move(stored));
             }
-        }
-
-        std::string toJsonString(const Json::Value& value)
-        {
-            Json::StreamWriterBuilder builder;
-            builder["indentation"] = "  ";
-            return Json::writeString(builder, value);
+            return result;
         }
     } // namespace
 
     UserStore::UserStore(const fs::path& dataDir)
-        : m_file(dataDir / "users.json")
+        : m_dataDir(dataDir)
     {
+        ensurePrivateDirectory(dataDir);
+        const auto file = dataDir / "users.sqlite";
+        // Created first so it is private; SQLite gives its -wal and -shm files the same mode
+        int fd = ::open(file.c_str(), O_RDWR | O_CREAT, 0600);
+        if (fd < 0) {
+            throw std::system_error(errno, std::generic_category(), "Cannot open " + file.string());
+        }
+        ::close(fd);
+
+        if (sqlite3_open_v2(file.c_str(), &m_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, nullptr) != SQLITE_OK) {
+            std::string error = m_db ? sqlite3_errmsg(m_db) : "out of memory";
+            sqlite3_close(m_db);
+            throw std::runtime_error("Cannot open " + file.string() + ": " + error);
+        }
+        try {
+            sqlite3_busy_timeout(m_db, BUSY_TIMEOUT_MS);
+            exec(m_db, "PRAGMA journal_mode = WAL");
+            exec(m_db, "PRAGMA foreign_keys = ON");
+            migrate();
+            importJson();
+        } catch (...) {
+            sqlite3_close(m_db);
+            throw;
+        }
     }
 
-    Json::Value UserStore::readLocked()
+    UserStore::~UserStore()
     {
+        sqlite3_close(m_db);
+    }
+
+    void UserStore::migrate()
+    {
+        Transaction trans(m_db);
+        Statement version(m_db, "PRAGMA user_version");
+        version.step();
+        const auto current = std::stoi(version.text(0));
+        if (current > static_cast<int>(MIGRATIONS.size())) {
+            throw std::runtime_error("users.sqlite (version " + std::to_string(current) + ") is newer than this server ("
+                                     + std::to_string(MIGRATIONS.size()) + "). Upgrade the server.");
+        }
+        for (auto next = current + 1; next <= static_cast<int>(MIGRATIONS.size()); ++next) {
+            for (const auto* statement : MIGRATIONS[next - 1]) {
+                exec(m_db, statement);
+            }
+            // PRAGMA takes no parameters
+            exec(m_db, ("PRAGMA user_version = " + std::to_string(next)).c_str());
+        }
+        trans.commit();
+    }
+
+    void UserStore::importJson()
+    {
+        const auto json = m_dataDir / "users.json";
         std::error_code ec;
-        auto mtime = fs::last_write_time(m_file, ec);
-        if (ec) {
-            if (ec == std::errc::no_such_file_or_directory) {
-                Json::Value empty;
-                empty["users"] = Json::objectValue;
-                return empty;
-            }
-            throw std::system_error(ec, "Cannot read " + m_file.string());
+        if (!fs::exists(json, ec)) {
+            return;
         }
-
-        if (!m_cache || mtime != m_cacheMtime) {
-            Json::Value data;
-            Json::CharReaderBuilder builder;
-            std::string errors;
-            auto text = readFile(m_file);
-            std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-            if (!reader->parse(text.data(), text.data() + text.size(), &data, &errors) || !data.isObject()) {
-                throw std::runtime_error("Invalid " + m_file.string() + ": " + errors);
+        {
+            Transaction trans(m_db);
+            // Checked again under the lock: another process may have just imported and renamed it
+            if (!fs::exists(json, ec)) {
+                return;
             }
-            if (!data["users"].isObject()) {
-                data["users"] = Json::objectValue;
+            // Users already here are skipped, so an import that stopped before the rename can run again
+            for (const auto& user : readUsersJson(json)) {
+                if (Statement(m_db, "INSERT OR IGNORE INTO users (name, created_at) VALUES (?, ?)", user.name, user.createdAt)
+                        .run()
+                    == 0) {
+                    continue;
+                }
+                for (const auto& device : user.devices) {
+                    insertDevice(m_db, device, user.name);
+                }
             }
-            migrateUsers(data["users"]);
-            m_cache = std::move(data);
-            m_cacheMtime = mtime;
+            trans.commit();
         }
-        return *m_cache;
-    }
-
-    void UserStore::writeLocked(const Json::Value& data)
-    {
-        ensurePrivateDirectory(m_file.parent_path());
-        atomicWriteFile(m_file, toJsonString(data));
-        m_cache.reset();
-    }
-
-    void UserStore::setLastSeenInterval(std::chrono::seconds interval)
-    {
-        m_lastSeenInterval = interval;
+        fs::rename(json, m_dataDir / "users.json.imported", ec);
+        if (ec && ec != std::errc::no_such_file_or_directory) {
+            throw std::system_error(ec, "Cannot rename " + json.string() + " after importing it");
+        }
     }
 
     std::optional<Identity> UserStore::authenticate(const std::string& token)
@@ -172,214 +330,178 @@ namespace syncserver
         if (token.empty()) {
             return std::nullopt;
         }
-        auto candidate = sha256Hex(token);
-
+        // As in Postgres: an indexed lookup by the hash of a 256-bit random token tells an attacker nothing useful
         std::lock_guard lock(m_mutex);
-        auto data = readLocked();
-        auto& users = data["users"];
-        std::optional<Identity> match;
-        // Compare against every device of every user, each comparison in constant time
-        for (const auto& user : users.getMemberNames()) {
-            auto& devices = users[user]["devices"];
-            for (const auto& id : devices.getMemberNames()) {
-                if (constantTimeEquals(devices[id]["tokenHash"].asString(), candidate)) {
-                    match = Identity{user, id};
-                }
-            }
+        auto staleBefore = isoTimestamp(std::chrono::system_clock::now() - m_lastSeenInterval);
+        Statement select(m_db,
+                         "SELECT user_name, id, coalesce(last_seen_at, '') < ? FROM devices WHERE token_hash = ?",
+                         staleBefore,
+                         sha256Hex(token));
+        if (!select.step()) {
+            return std::nullopt;
         }
-
+        Identity identity{select.text(0), select.text(1)};
         // ISO timestamps in UTC sort like the times they stand for
-        if (match) {
-            auto& device = users[match->user]["devices"][match->deviceId];
-            auto staleBefore = isoTimestamp(std::chrono::system_clock::now() - m_lastSeenInterval);
-            if (device["lastSeenAt"].asString() < staleBefore) {
-                device["lastSeenAt"] = isoTimestamp();
-                writeLocked(data);
-            }
+        if (select.text(2) == "1") {
+            Statement(m_db,
+                      "UPDATE devices SET last_seen_at = ? WHERE user_name = ? AND id = ?",
+                      isoTimestamp(),
+                      identity.user,
+                      identity.deviceId)
+                .run();
         }
-        return match;
-    }
-
-    void UserStore::setPairingLifetime(std::chrono::seconds lifetime)
-    {
-        m_pairingLifetime = lifetime;
-    }
-
-    std::string UserStore::normalizePairingCode(std::string_view code)
-    {
-        std::string normalized;
-        for (unsigned char c : code) {
-            if (c == '-' || std::isspace(c)) {
-                continue;
-            }
-            normalized += static_cast<char>(std::toupper(c));
-        }
-        return normalized;
+        return identity;
     }
 
     PairingCode UserStore::createPairingCode(const std::string& user, const std::string& createdBy)
     {
+        auto code = newPairingCode();
+        auto now = isoTimestamp();
+        auto expiresAt = isoTimestamp(std::chrono::system_clock::now() + m_pairingLifetime);
+
         std::lock_guard lock(m_mutex);
-        auto data = readLocked();
-        if (!data["users"].isMember(user)) {
+        Transaction trans(m_db);
+        if (!userExists(m_db, user)) {
             throw std::invalid_argument("No such user: " + user);
         }
-        auto& entry = data["users"][user];
-        dropExpiredPairings(entry);
-
+        Statement(m_db, "DELETE FROM pairing_codes WHERE user_name = ? AND expires_at <= ?", user, now).run();
         // Keep a user's waiting codes few, dropping the ones that expire first
-        auto& pairings = entry["pairings"];
-        while (pairings.isObject() && pairings.size() >= MaxPairingsPerUser) {
-            auto names = pairings.getMemberNames();
-            auto oldest = *std::min_element(names.begin(), names.end(), [&](const auto& a, const auto& b) {
-                return pairings[a]["expiresAt"].asString() < pairings[b]["expiresAt"].asString();
-            });
-            pairings.removeMember(oldest);
-        }
-
-        auto code = generatePairingCode();
-        auto expiresAt = isoTimestamp(std::chrono::system_clock::now() + m_pairingLifetime);
-        Json::Value pairing;
-        pairing["expiresAt"] = expiresAt;
-        pairing["createdBy"] = createdBy;
-        entry["pairings"][sha256Hex(code)] = pairing;
-        writeLocked(data);
-        return {code.substr(0, 4) + "-" + code.substr(4), expiresAt};
+        Statement(m_db,
+                  "DELETE FROM pairing_codes WHERE code_hash IN ("
+                  "SELECT code_hash FROM pairing_codes WHERE user_name = ? "
+                  "ORDER BY expires_at DESC LIMIT -1 OFFSET ?)",
+                  user,
+                  static_cast<int64_t>(MaxPairingsPerUser - 1))
+            .run();
+        Statement(m_db,
+                  "INSERT INTO pairing_codes (code_hash, user_name, created_by, created_at, expires_at) "
+                  "VALUES (?, ?, nullif(?, ''), ?, ?)",
+                  sha256Hex(code),
+                  user,
+                  createdBy,
+                  now,
+                  expiresAt)
+            .run();
+        trans.commit();
+        return {formatPairingCode(code), expiresAt};
     }
 
     std::optional<PairedDevice> UserStore::claimPairingCode(const std::string& code, const std::string& deviceName)
     {
         validateDeviceName(deviceName);
-        auto candidate = sha256Hex(normalizePairingCode(code));
+        auto hash = sha256Hex(normalizePairingCode(code));
 
         std::lock_guard lock(m_mutex);
-        auto data = readLocked();
-        auto& users = data["users"];
-        bool changed = false;
-        std::optional<std::pair<std::string, std::string>> match;
-        for (const auto& name : users.getMemberNames()) {
-            auto& user = users[name];
-            changed = dropExpiredPairings(user) || changed;
-            if (!user.isMember("pairings")) {
-                continue;
-            }
-            auto& pairings = user["pairings"];
-            for (const auto& hash : pairings.getMemberNames()) {
-                if (constantTimeEquals(hash, candidate)) {
-                    match = {name, hash};
-                }
-            }
-        }
-        if (!match) {
-            if (changed) {
-                writeLocked(data);
-            }
+        Transaction trans(m_db);
+        Statement(m_db, "DELETE FROM pairing_codes WHERE expires_at <= ?", isoTimestamp()).run();
+        Statement select(m_db, "SELECT user_name FROM pairing_codes WHERE code_hash = ?", hash);
+        if (!select.step()) {
+            trans.commit();
             return std::nullopt;
         }
 
         // Each code adds one device only
-        auto& user = users[match->first];
-        user["pairings"].removeMember(match->second);
-        if (user["pairings"].empty()) {
-            user.removeMember("pairings");
-        }
-        auto id = generateDeviceId();
-        auto token = generateToken();
-        user["devices"][id] = newDevice(deviceName, token);
-        writeLocked(data);
-        return PairedDevice{match->first, id, token};
+        PairedDevice paired{select.text(0), newDeviceId(), newToken()};
+        Statement(m_db, "DELETE FROM pairing_codes WHERE code_hash = ?", hash).run();
+        insertDevice(m_db, newDevice(paired.deviceId, deviceName, paired.token), paired.user);
+        trans.commit();
+        return paired;
     }
 
     std::string UserStore::addUser(const std::string& name, const std::string& deviceName)
     {
-        if (!isValidName(name)) {
-            throw std::invalid_argument("Invalid user name \"" + name
-                                        + "\" (allowed: letters, digits, \".\", \"_\", \"-\"; max 64 chars)");
-        }
+        validateUserName(name);
         validateDeviceName(deviceName);
+        auto token = newToken();
+
         std::lock_guard lock(m_mutex);
-        auto data = readLocked();
-        if (data["users"].isMember(name)) {
+        Transaction trans(m_db);
+        if (Statement(m_db, "INSERT OR IGNORE INTO users (name, created_at) VALUES (?, ?)", name, isoTimestamp()).run()
+            == 0) {
             throw std::invalid_argument("User \"" + name + "\" already exists. Add a device with: devices add " + name
                                         + " <device-name>");
         }
-        Json::Value user;
-        user["createdAt"] = isoTimestamp();
-        user["devices"] = Json::objectValue;
-        auto token = generateToken();
-        user["devices"][generateDeviceId()] = newDevice(deviceName, token);
-        data["users"][name] = user;
-        writeLocked(data);
+        insertDevice(m_db, newDevice(newDeviceId(), deviceName, token), name);
+        trans.commit();
         return token;
     }
 
     bool UserStore::removeUser(const std::string& name)
     {
         std::lock_guard lock(m_mutex);
-        auto data = readLocked();
-        if (!data["users"].isMember(name)) {
-            return false;
-        }
-        data["users"].removeMember(name);
-        writeLocked(data);
-        return true;
+        return Statement(m_db, "DELETE FROM users WHERE name = ?", name).run() > 0;
     }
 
     std::vector<std::string> UserStore::listUsers()
     {
         std::lock_guard lock(m_mutex);
-        auto names = readLocked()["users"].getMemberNames();
-        std::sort(names.begin(), names.end());
+        std::vector<std::string> names;
+        Statement select(m_db, "SELECT name FROM users ORDER BY name");
+        while (select.step()) {
+            names.push_back(select.text(0));
+        }
         return names;
     }
 
     std::pair<std::string, std::string> UserStore::addDevice(const std::string& user, const std::string& deviceName)
     {
         validateDeviceName(deviceName);
+        auto id = newDeviceId();
+        auto token = newToken();
+
         std::lock_guard lock(m_mutex);
-        auto data = readLocked();
-        if (!data["users"].isMember(user)) {
+        Transaction trans(m_db);
+        if (!userExists(m_db, user)) {
             throw std::invalid_argument("No such user: " + user);
         }
-        auto id = generateDeviceId();
-        auto token = generateToken();
-        data["users"][user]["devices"][id] = newDevice(deviceName, token);
-        writeLocked(data);
+        insertDevice(m_db, newDevice(id, deviceName, token), user);
+        trans.commit();
         return {id, token};
     }
 
     bool UserStore::revokeDevice(const std::string& user, const std::string& deviceId)
     {
         std::lock_guard lock(m_mutex);
-        auto data = readLocked();
-        // Check before indexing: operator[] would create the user
-        if (!data["users"].isMember(user) || !data["users"][user]["devices"].isMember(deviceId)) {
-            return false;
-        }
-        data["users"][user]["devices"].removeMember(deviceId);
-        writeLocked(data);
-        return true;
+        return Statement(m_db, "DELETE FROM devices WHERE user_name = ? AND id = ?", user, deviceId).run() > 0;
     }
 
     std::vector<Device> UserStore::listDevices(const std::string& user)
     {
         std::lock_guard lock(m_mutex);
-        auto data = readLocked();
-        if (!data["users"].isMember(user)) {
+        if (!userExists(m_db, user)) {
             throw std::invalid_argument("No such user: " + user);
         }
-        const auto& devices = data["users"][user]["devices"];
-        std::vector<Device> result;
-        for (const auto& id : devices.getMemberNames()) {
-            const auto& device = devices[id];
-            result.push_back({id,
-                              device["name"].asString(),
-                              device["createdAt"].asString(),
-                              device["lastSeenAt"].asString()});
+        std::vector<Device> devices;
+        Statement select(m_db,
+                         "SELECT id, name, created_at, last_seen_at FROM devices WHERE user_name = ? "
+                         "ORDER BY created_at, id",
+                         user);
+        while (select.step()) {
+            devices.push_back({select.text(0), select.text(1), select.text(2), select.text(3)});
         }
-        std::sort(result.begin(), result.end(), [](const Device& a, const Device& b) {
-            return a.createdAt < b.createdAt;
-        });
-        return result;
+        return devices;
+    }
+
+    std::vector<StoredUser> UserStore::exportUsers()
+    {
+        std::lock_guard lock(m_mutex);
+        std::vector<StoredUser> users;
+        Statement selectUsers(m_db, "SELECT name, created_at FROM users ORDER BY name");
+        while (selectUsers.step()) {
+            StoredUser user{selectUsers.text(0), selectUsers.text(1), {}};
+            Statement selectDevices(m_db,
+                                    "SELECT id, name, token_hash, created_at, last_seen_at FROM devices "
+                                    "WHERE user_name = ? ORDER BY created_at, id",
+                                    user.name);
+            while (selectDevices.step()) {
+                user.devices.push_back({selectDevices.text(0),
+                                        selectDevices.text(1),
+                                        selectDevices.text(2),
+                                        selectDevices.text(3),
+                                        selectDevices.text(4)});
+            }
+            users.push_back(std::move(user));
+        }
+        return users;
     }
 } // namespace syncserver

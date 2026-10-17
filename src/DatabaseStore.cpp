@@ -66,17 +66,6 @@ namespace syncserver
         }
     } // namespace
 
-    Json::Value DatabaseMeta::toJson() const
-    {
-        Json::Value json;
-        json["id"] = id;
-        json["revision"] = static_cast<Json::Int64>(revision);
-        json["etag"] = etag;
-        json["size"] = static_cast<Json::UInt64>(size);
-        json["updatedAt"] = updatedAt;
-        return json;
-    }
-
     DatabaseStore::DatabaseStore(const fs::path& dataDir, unsigned historySize)
         : m_root(dataDir / "databases")
         , m_historySize(historySize)
@@ -185,6 +174,9 @@ namespace syncserver
         // Blob first, then metadata, each via rename so readers never see a partial file
         atomicWriteFile(p.blob, data);
         atomicWriteFile(p.meta, toJsonString(meta.toJson()));
+        if (m_listener) {
+            m_listener(user, changeEvent(meta));
+        }
         return {std::move(meta), !current};
     }
 
@@ -202,7 +194,29 @@ namespace syncserver
         fs::remove(p.meta);
         fs::remove(p.blob);
         fs::remove_all(p.history);
+        if (m_listener) {
+            m_listener(user, deletedEvent(id));
+        }
         return true;
+    }
+
+    void DatabaseStore::setChangeListener(ChangeListener listener)
+    {
+        m_listener = std::move(listener);
+    }
+
+    std::vector<std::string> DatabaseStore::owners() const
+    {
+        std::vector<std::string> names;
+        std::error_code ec;
+        for (const auto& item : fs::directory_iterator(m_root, ec)) {
+            auto name = item.path().filename().string();
+            if (item.is_directory() && isValidName(name)) {
+                names.push_back(name);
+            }
+        }
+        std::sort(names.begin(), names.end());
+        return names;
     }
 
     void DatabaseStore::pruneHistory(const fs::path& historyDir) const

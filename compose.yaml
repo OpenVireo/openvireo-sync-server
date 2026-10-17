@@ -1,0 +1,30 @@
+# The sync server with the data directory: users and databases live in the "data" volume.
+#
+#   docker compose up -d --build
+#   docker compose run --rm sync-server users add alice laptop     # prints the device's access token
+#   docker compose run --rm sync-server devices pair alice         # or a one-time pairing code
+#
+# The port is published on 127.0.0.1 only. Put an HTTPS reverse proxy in front before exposing it.
+#
+# For Postgres and an S3 bucket instead, see compose.cloud.yaml.
+
+services:
+  sync-server:
+    build:
+      context: .
+      target: runtime
+    image: keepassxc-sync-server
+    restart: unless-stopped
+    ports:
+      # SYNC_HOST_PORT picks another port on the host
+      - "127.0.0.1:${SYNC_HOST_PORT:-8787}:8787"
+    environment:
+      # Inside the container the server listens on all interfaces; the host only publishes it on localhost
+      SYNC_BEHIND_PROXY: "1"
+      # SYNC_HISTORY_SIZE: "10"
+      # SYNC_MAX_DB_BYTES: "52428800"
+    volumes:
+      - data:/data
+
+volumes:
+  data:

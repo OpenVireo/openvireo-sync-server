@@ -1,10 +1,9 @@
 #pragma once
 
-#include <json/json.h>
+#include "Storage.h"
 
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -15,21 +14,8 @@
 
 namespace syncserver
 {
-    struct DatabaseMeta
-    {
-        std::string id;
-        int64_t revision = 0;
-        // Quoted SHA-256 of the stored blob
-        std::string etag;
-        uint64_t size = 0;
-        std::string updatedAt;
-
-        Json::Value toJson() const;
-    };
-
     /**
-     * Stores opaque database blobs on disk. The server never decrypts anything;
-     * KeePassXC uploads the already-encrypted .kdbx file.
+     * Stores database blobs on disk.
      *
      * Layout:
      *   <dataDir>/databases/<user>/<id>.kdbx        current version
@@ -37,37 +23,28 @@ namespace syncserver
      *   <dataDir>/databases/<user>/.history/<id>/<revision>.kdbx   previous versions
      *   <dataDir>/databases/<user>/.history/<id>/<revision>.json   their metadata
      */
-    class DatabaseStore
+    class DatabaseStore : public DatabaseRepository
     {
     public:
-        // Runs under the database's lock with its current metadata and may throw to abort
-        using Precondition = std::function<void(const std::optional<DatabaseMeta>&)>;
-
-        struct Entry
-        {
-            DatabaseMeta meta;
-            std::string data;
-        };
-
-        struct WriteResult
-        {
-            DatabaseMeta meta;
-            bool created = false;
-        };
-
         DatabaseStore(const std::filesystem::path& dataDir, unsigned historySize);
 
-        std::optional<DatabaseMeta> meta(const std::string& user, const std::string& id);
-        std::optional<Entry> read(const std::string& user, const std::string& id);
-        std::vector<DatabaseMeta> list(const std::string& user);
-        WriteResult
-        write(const std::string& user, const std::string& id, std::string_view data, const Precondition& precondition);
-        bool remove(const std::string& user, const std::string& id, const Precondition& precondition);
+        std::optional<DatabaseMeta> meta(const std::string& user, const std::string& id) override;
+        std::optional<Entry> read(const std::string& user, const std::string& id) override;
+        std::vector<DatabaseMeta> list(const std::string& user) override;
+        WriteResult write(const std::string& user,
+                          const std::string& id,
+                          std::string_view data,
+                          const Precondition& precondition) override;
+        bool remove(const std::string& user, const std::string& id, const Precondition& precondition) override;
 
-        // The current version and the kept previous ones, newest first; nullopt when the database doesn't exist
-        std::optional<std::vector<DatabaseMeta>> history(const std::string& user, const std::string& id);
-        // One version, the current one or a kept previous one
-        std::optional<Entry> readRevision(const std::string& user, const std::string& id, int64_t revision);
+        std::optional<std::vector<DatabaseMeta>> history(const std::string& user, const std::string& id) override;
+        std::optional<Entry> readRevision(const std::string& user, const std::string& id, int64_t revision) override;
+
+        // Only this process writes the directory, so it hears about every change itself
+        void setChangeListener(ChangeListener listener) override;
+
+        // Users with a databases folder, including removed users whose databases were kept
+        std::vector<std::string> owners() const;
 
     private:
         struct Paths
@@ -90,5 +67,6 @@ namespace syncserver
         unsigned m_historySize;
         std::mutex m_locksMutex;
         std::map<std::string, std::shared_ptr<std::mutex>> m_locks;
+        ChangeListener m_listener;
     };
 } // namespace syncserver
