@@ -3,14 +3,25 @@
 #include <drogon/drogon_test.h>
 
 #include "Config.h"
+#include "DatabaseStore.h"
+#include "Storage.h"
 #include "SyncApi.h"
 #include "UserStore.h"
 #include "Util.h"
+
+#ifdef SYNC_SERVER_WITH_CLOUD
+#include "BlobStore.h"
+#include "Import.h"
+#include "PgDatabaseRepository.h"
+#include "Postgres.h"
+#endif
 
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <future>
+#include <iostream>
+#include <sstream>
 #include <thread>
 
 #include <arpa/inet.h>
@@ -25,7 +36,11 @@ namespace
 {
     const std::string KDBX_HEADER("\x03\xd9\xa2\x9a\x67\xfb\x4b\xb5", 8);
 
+    // The server's configuration; Postgres and S3 when SYNC_DATABASE_URL and SYNC_S3_* are set
+    syncserver::Config g_config;
     fs::path g_dataDir;
+    // The test's own connection to the server's storage, as a CLI in another container would have
+    syncserver::Storage g_storage;
     std::string g_baseUrl;
     std::string g_aliceToken;
     std::string g_bobToken;
@@ -101,6 +116,31 @@ namespace
         }
         auto body = resp->getJsonObject();
         return body ? *body : Json::Value();
+    }
+
+    // Another handle on the server's storage, for tests that change settings such as the pairing lifetime.
+    // With the data directory it is a directory of its own, so the tests' users stay out of the server's.
+    std::shared_ptr<syncserver::UserRepository> separateUsers(fs::path* dir = nullptr)
+    {
+        if (g_config.usesPostgres()) {
+            return syncserver::openStorage(g_config).users;
+        }
+        auto path = fs::temp_directory_path() / ("kpxc-sync-users-" + utils::getUuid());
+        fs::create_directories(path);
+        if (dir) {
+            *dir = path;
+        }
+        return std::make_shared<syncserver::UserStore>(path);
+    }
+
+    std::vector<int64_t> revisions(const std::string& id)
+    {
+        std::vector<int64_t> result;
+        auto body = json(request(Get, "/databases/" + id + "/history"));
+        for (const auto& version : body["versions"]) {
+            result.push_back(version["revision"].asInt64());
+        }
+        return result;
     }
 
     // Creates a database and returns its ETag
@@ -207,6 +247,10 @@ DROGON_TEST(KeepsBoundedHistory)
         REQUIRE(resp->statusCode() == k200OK);
         etag = resp->getHeader("ETag");
     }
+    CHECK((revisions("history") == std::vector<int64_t>{6, 5, 4}));
+    if (g_config.usesPostgres()) {
+        return;
+    }
     std::vector<std::string> history;
     for (const auto& item : fs::directory_iterator(g_dataDir / "databases" / "alice" / ".history" / "history")) {
         history.push_back(item.path().filename().string());
@@ -270,7 +314,7 @@ DROGON_TEST(DeleteHonoursIfMatch)
 
 DROGON_TEST(EachDeviceHasItsOwnRevocableToken)
 {
-    syncserver::UserStore users(g_dataDir);
+    auto& users = *g_storage.users;
     auto [phoneId, phoneToken] = users.addDevice("alice", "phone");
     CHECK(phoneToken != g_aliceToken);
 
@@ -293,8 +337,9 @@ DROGON_TEST(EachDeviceHasItsOwnRevocableToken)
 
 DROGON_TEST(ListsDevicesAndWhenTheyWereLastSeen)
 {
-    auto dir = fs::temp_directory_path() / ("kpxc-sync-users-" + utils::getUuid());
-    syncserver::UserStore users(dir);
+    fs::path dir;
+    auto repository = separateUsers(&dir);
+    auto& users = *repository;
     auto token = users.addUser("carol", "desktop");
     auto [tabletId, tabletToken] = users.addDevice("carol", "tablet");
 
@@ -318,10 +363,12 @@ DROGON_TEST(ListsDevicesAndWhenTheyWereLastSeen)
     CHECK_THROWS(users.addUser("carol", "again"));
     CHECK_THROWS(users.addDevice("carol", ""));
     CHECK_THROWS(users.addDevice("nobody", "phone"));
-    fs::remove_all(dir);
+    if (!dir.empty()) {
+        fs::remove_all(dir);
+    }
 }
 
-DROGON_TEST(KeepsTokensFromBeforeDevicesWorking)
+DROGON_TEST(ImportsUsersJsonFromOlderServers)
 {
     auto dir = fs::temp_directory_path() / ("kpxc-sync-users-" + utils::getUuid());
     fs::create_directories(dir);
@@ -331,17 +378,40 @@ DROGON_TEST(KeepsTokensFromBeforeDevicesWorking)
     data["users"]["dave"]["createdAt"] = "2026-01-01T00:00:00.000Z";
     syncserver::atomicWriteFile(dir / "users.json", data.toStyledString());
 
-    syncserver::UserStore users(dir);
-    auto identity = users.authenticate(oldToken);
-    REQUIRE(identity.has_value());
-    CHECK(identity->user == "dave");
-    CHECK(identity->deviceId == "legacy");
+    data["users"]["erin"]["createdAt"] = "2026-02-01T00:00:00.000Z";
+    data["users"]["erin"]["devices"]["d-0123456789ab"]["name"] = "phone";
+    data["users"]["erin"]["devices"]["d-0123456789ab"]["tokenHash"] = syncserver::sha256Hex("erin-token");
+    data["users"]["erin"]["devices"]["d-0123456789ab"]["createdAt"] = "2026-02-01T00:00:00.000Z";
+    data["users"]["erin"]["devices"]["d-0123456789ab"]["lastSeenAt"] = "2026-03-01T00:00:00.000Z";
+    syncserver::atomicWriteFile(dir / "users.json", data.toStyledString());
 
-    // It can be revoked like any other device once the others have their own tokens
-    users.addDevice("dave", "laptop");
-    CHECK(users.listDevices("dave").size() == 2);
-    CHECK(users.revokeDevice("dave", "legacy"));
-    CHECK(!users.authenticate(oldToken).has_value());
+    {
+        syncserver::UserStore users(dir);
+        CHECK(!fs::exists(dir / "users.json"));
+        CHECK(fs::exists(dir / "users.json.imported"));
+        CHECK((users.listUsers() == std::vector<std::string>{"dave", "erin"}));
+        auto erin = users.listDevices("erin");
+        REQUIRE(erin.size() == 1);
+        CHECK(erin[0].id == "d-0123456789ab");
+        CHECK(erin[0].lastSeenAt == "2026-03-01T00:00:00.000Z");
+        CHECK(users.authenticate("erin-token")->deviceId == "d-0123456789ab");
+
+        auto identity = users.authenticate(oldToken);
+        REQUIRE(identity.has_value());
+        CHECK(identity->user == "dave");
+        CHECK(identity->deviceId == "legacy");
+
+        // It can be revoked like any other device once the others have their own tokens
+        users.addDevice("dave", "laptop");
+        CHECK(users.listDevices("dave").size() == 2);
+        CHECK(users.revokeDevice("dave", "legacy"));
+        CHECK(!users.authenticate(oldToken).has_value());
+    }
+
+    // Imported once: reopening keeps the changes made since
+    syncserver::UserStore reopened(dir);
+    CHECK(reopened.listDevices("dave").size() == 1);
+    CHECK(!reopened.authenticate(oldToken).has_value());
     fs::remove_all(dir);
 }
 
@@ -481,8 +551,7 @@ DROGON_TEST(PairsADeviceWithAOneTimeCode)
     CHECK(token.size() >= 40);
     CHECK(request(Get, "/databases", {token})->statusCode() == k200OK);
 
-    syncserver::UserStore users(g_dataDir);
-    auto devices = users.listDevices("alice");
+    auto devices = g_storage.users->listDevices("alice");
     auto added = std::find_if(
         devices.begin(), devices.end(), [&](const auto& d) { return d.id == paired["deviceId"].asString(); });
     REQUIRE(added != devices.end());
@@ -504,26 +573,27 @@ DROGON_TEST(PairsADeviceWithAOneTimeCode)
 
 DROGON_TEST(PairingCodesExpireAndStayFew)
 {
-    // Its own folder: tests run in parallel, and the server would write its copy of users.json over this one's
-    auto dataDir = fs::temp_directory_path() / ("kpxc-sync-pairing-" + utils::getUuid());
-    fs::create_directories(dataDir);
-    syncserver::UserStore users(dataDir);
-    users.addUser("bob", "laptop");
+    fs::path dataDir;
+    auto repository = separateUsers(&dataDir);
+    auto& users = *repository;
+    users.addUser("erin", "laptop");
     users.setPairingLifetime(std::chrono::seconds(-1));
-    auto expired = users.createPairingCode("bob");
+    auto expired = users.createPairingCode("erin");
     CHECK(!users.claimPairingCode(expired.code, "late"));
 
     users.setPairingLifetime(std::chrono::minutes(10));
     std::vector<std::string> codes;
     for (std::size_t i = 0; i < syncserver::UserStore::MaxPairingsPerUser + 1; ++i) {
-        codes.push_back(users.createPairingCode("bob").code);
+        codes.push_back(users.createPairingCode("erin").code);
     }
 
-    // The codes themselves never reach the file
-    auto file = syncserver::readFile(dataDir / "users.json");
-    const auto newest = syncserver::UserStore::normalizePairingCode(codes.back());
-    CHECK(file.find(newest) == std::string::npos);
-    CHECK(file.find(syncserver::sha256Hex(newest)) != std::string::npos);
+    // The codes themselves never reach the file (or its write-ahead log, where recent changes are)
+    if (!dataDir.empty()) {
+        auto file = syncserver::readFile(dataDir / "users.sqlite") + syncserver::readFile(dataDir / "users.sqlite-wal");
+        const auto newest = syncserver::UserStore::normalizePairingCode(codes.back());
+        CHECK(file.find(newest) == std::string::npos);
+        CHECK(file.find(syncserver::sha256Hex(newest)) != std::string::npos);
+    }
 
     // One that expires first made room for the newest (codes made in the same millisecond tie)
     CHECK(users.claimPairingCode(codes.back(), "last"));
@@ -535,7 +605,9 @@ DROGON_TEST(PairingCodesExpireAndStayFew)
     }
     CHECK(claimed == syncserver::UserStore::MaxPairingsPerUser);
     CHECK_THROWS(users.createPairingCode("nobody"));
-    fs::remove_all(dataDir);
+    if (!dataDir.empty()) {
+        fs::remove_all(dataDir);
+    }
 }
 
 DROGON_TEST(LimitsFailuresPerClientAndInTotal)
@@ -558,21 +630,208 @@ DROGON_TEST(LimitsFailuresPerClientAndInTotal)
     CHECK(limiter.retryAfter("a", t0 + 70s) == 0);
 }
 
+#ifdef SYNC_SERVER_WITH_CLOUD
+namespace
+{
+    // Another instance on the same Postgres and bucket, as a second container behind the load balancer has
+    struct OtherInstance
+    {
+        explicit OtherInstance(syncserver::Config config = g_config)
+            : postgres(std::make_shared<syncserver::Postgres>(config))
+            , blobs(std::make_shared<syncserver::BlobStore>(config.s3))
+            , databases(postgres, blobs, config.historySize)
+        {
+        }
+
+        std::shared_ptr<syncserver::Postgres> postgres;
+        std::shared_ptr<syncserver::BlobStore> blobs;
+        syncserver::PgDatabaseRepository databases;
+    };
+
+    syncserver::DatabaseRepository::Precondition ifMatch(const std::string& etag)
+    {
+        return [etag](const std::optional<syncserver::DatabaseMeta>& current) {
+            if (!current || current->etag != etag) {
+                throw std::runtime_error("precondition failed");
+            }
+        };
+    }
+} // namespace
+
+DROGON_TEST(ConditionalWritesAcrossInstancesExactlyOneWins)
+{
+    if (!g_config.usesPostgres()) {
+        return;
+    }
+    OtherInstance other;
+    auto etag = create("race-instances");
+    std::vector<std::future<bool>> writers;
+    for (int i = 1; i <= 6; ++i) {
+        writers.push_back(std::async(std::launch::async, [&other, etag, i] {
+            auto data = fakeDatabase("writer " + std::to_string(i));
+            if (i % 2) {
+                return request(Put, "/databases/race-instances", {g_aliceToken, {{"If-Match", etag}}, data})
+                           ->statusCode()
+                       == k200OK;
+            }
+            try {
+                other.databases.write("alice", "race-instances", data, ifMatch(etag));
+                return true;
+            } catch (const std::runtime_error&) {
+                return false;
+            }
+        }));
+    }
+    int ok = 0;
+    for (auto& writer : writers) {
+        ok += writer.get();
+    }
+    CHECK(ok == 1);
+    CHECK((revisions("race-instances") == std::vector<int64_t>{2, 1}));
+}
+
+DROGON_TEST(EventsReachStreamsOnOtherInstances)
+{
+    if (!g_config.usesPostgres()) {
+        return;
+    }
+    OtherInstance other;
+    EventStream alice(g_aliceToken);
+    REQUIRE(alice.waitFor(": connected"));
+    auto result = other.databases.write("alice", "from-elsewhere", fakeDatabase("x"), [](const auto&) {});
+    CHECK(alice.waitFor("\"id\":\"from-elsewhere\""));
+    CHECK(alice.received().find("\"revision\":1") != std::string::npos);
+    CHECK(result.created);
+}
+
+DROGON_TEST(PrunedVersionsLeaveNoFilesBehind)
+{
+    if (!g_config.usesPostgres()) {
+        return;
+    }
+    OtherInstance other;
+    auto etag = create("pruned", "version 1");
+    for (int i = 2; i <= 5; ++i) {
+        etag = request(Put, "/databases/pruned", {g_aliceToken, {{"If-Match", etag}}, fakeDatabase(std::to_string(i))})
+                   ->getHeader("ETag");
+    }
+    // The current version and two kept ones; every one still readable
+    CHECK(other.blobs->list("alice/pruned/").size() == 3);
+    for (auto revision : revisions("pruned")) {
+        CHECK(request(Get, "/databases/pruned/history/" + std::to_string(revision))->statusCode() == k200OK);
+    }
+    // Identical contents get files of their own, so pruning one never removes the other's
+    etag =
+        request(Put, "/databases/pruned", {g_aliceToken, {{"If-Match", etag}}, fakeDatabase("4")})->getHeader("ETag");
+    request(Put, "/databases/pruned", {g_aliceToken, {{"If-Match", etag}}, fakeDatabase("4")});
+    CHECK(request(Get, "/databases/pruned")->body() == fakeDatabase("4"));
+    CHECK(other.blobs->list("alice/pruned/").size() == 3);
+
+    request(Delete, "/databases/pruned");
+    CHECK(other.blobs->list("alice/pruned/").empty());
+}
+
+DROGON_TEST(SweepDeletesOnlyOldUnreferencedFiles)
+{
+    if (!g_config.usesPostgres()) {
+        return;
+    }
+    // A prefix of its own, so uploads of tests running alongside aren't swept
+    auto config = g_config;
+    config.s3.prefix += "sweep/";
+    OtherInstance other(config);
+    other.databases.write("alice", "kept", fakeDatabase("kept"), [](const auto&) {});
+    other.blobs->put("alice/orphan/abc.kdbx", fakeDatabase("orphan"));
+
+    // Too new: it may belong to an upload that hasn't committed yet
+    CHECK(other.databases.sweep(std::chrono::hours(1)) == std::optional<std::size_t>(0));
+    CHECK(other.blobs->list().size() == 2);
+    CHECK(other.databases.sweep(std::chrono::hours(-1)) == std::optional<std::size_t>(1));
+    auto left = other.blobs->list();
+    REQUIRE(left.size() == 1);
+    CHECK(left[0].key.rfind("alice/kept/", 0) == 0);
+    other.databases.remove("alice", "kept", [](const auto&) {});
+}
+
+DROGON_TEST(ImportsADataDirectoryUnchanged)
+{
+    if (!g_config.usesPostgres()) {
+        return;
+    }
+    auto dir = fs::temp_directory_path() / ("kpxc-sync-import-" + utils::getUuid());
+    fs::create_directories(dir);
+    const std::string legacyToken = "token-from-an-older-server";
+    {
+        Json::Value data;
+        data["users"]["gina"]["tokenHash"] = syncserver::sha256Hex(legacyToken);
+        data["users"]["gina"]["createdAt"] = "2026-01-01T00:00:00.000Z";
+        syncserver::atomicWriteFile(dir / "users.json", data.toStyledString());
+    }
+    std::string frankToken = syncserver::UserStore(dir).addUser("frank", "laptop");
+    syncserver::DatabaseStore source(dir, 5);
+    for (int i = 1; i <= 3; ++i) {
+        source.write("frank", "notes", fakeDatabase("notes " + std::to_string(i)), [](const auto&) {});
+    }
+    auto sourceMeta = *source.meta("frank", "notes");
+
+    auto target = syncserver::openStorage(g_config);
+    std::ostringstream out;
+    CHECK(syncserver::importDataDirectory(dir, target, out));
+
+    auto read = request(Get, "/databases/notes", {frankToken});
+    REQUIRE(read->statusCode() == k200OK);
+    CHECK(read->getHeader("ETag") == sourceMeta.etag);
+    CHECK(read->getHeader("X-Database-Revision") == "3");
+    CHECK(read->body() == fakeDatabase("notes 3"));
+    // Other users still see nothing of it
+    CHECK((revisions("notes").empty()));
+    auto history = json(request(Get, "/databases/notes/history", {frankToken}))["versions"];
+    REQUIRE(history.size() == 3);
+    CHECK(request(Get, "/databases/notes/history/1", {frankToken})->body() == fakeDatabase("notes 1"));
+    CHECK(request(Get, "/databases", {legacyToken})->statusCode() == k200OK);
+
+    // Running it again changes nothing and says so
+    CHECK(!syncserver::importDataDirectory(dir, target, out));
+    CHECK(request(Get, "/databases/notes", {frankToken})->getHeader("ETag") == sourceMeta.etag);
+    fs::remove_all(dir);
+}
+#endif
+
 int main(int argc, char** argv)
 {
     g_dataDir = fs::temp_directory_path() / ("kpxc-sync-test-" + utils::getUuid());
     fs::create_directories(g_dataDir);
 
-    syncserver::UserStore users(g_dataDir);
-    g_aliceToken = users.addUser("alice", "laptop");
-    g_bobToken = users.addUser("bob", "laptop");
-
-    syncserver::Config config;
+    auto& config = g_config;
+    try {
+        auto environment = syncserver::Config::fromEnvironment();
+        config.databaseUrl = environment.databaseUrl;
+        config.s3 = environment.s3;
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << "\n";
+        return 1;
+    }
     config.dataDir = g_dataDir;
     config.maxDatabaseBytes = 1024;
     config.historySize = 2;
     config.threads = 4;
-    syncserver::registerSyncApi(config);
+    if (config.usesPostgres()) {
+        // A schema and key prefix of its own, so runs don't see each other's data
+        std::string run;
+        for (unsigned char c : utils::getUuid()) {
+            if (std::isalnum(c) && run.size() < 12) {
+                run += static_cast<char>(std::tolower(c));
+            }
+        }
+        config.databaseSchema = "test_" + run;
+        config.s3.prefix += "test-" + run + "/";
+        std::cout << "Testing against Postgres and S3 (schema " << config.databaseSchema << ")" << std::endl;
+    }
+
+    g_storage = syncserver::openStorage(config);
+    g_aliceToken = g_storage.users->addUser("alice", "laptop");
+    g_bobToken = g_storage.users->addUser("bob", "laptop");
+    syncserver::registerSyncApi(config, syncserver::openStorage(config));
 
     std::promise<void> started;
     std::thread server([&] {
@@ -588,5 +847,19 @@ int main(int argc, char** argv)
     app().getLoop()->queueInLoop([] { app().quit(); });
     server.join();
     fs::remove_all(g_dataDir);
+#ifdef SYNC_SERVER_WITH_CLOUD
+    if (config.usesPostgres()) {
+        OtherInstance cleanup;
+        for (const auto& object : cleanup.blobs->list()) {
+            cleanup.blobs->remove(object.key);
+        }
+        cleanup.postgres->transaction([&](drogon::orm::Transaction& trans) {
+            // Quietly: a cascading drop logs every table as a notice
+            trans.execSqlSync("SET LOCAL client_min_messages = warning");
+            trans.execSqlSync("DROP SCHEMA " + config.databaseSchema + " CASCADE");
+        });
+    }
+#endif
+    g_storage = {};
     return status;
 }

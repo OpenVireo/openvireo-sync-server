@@ -1,0 +1,137 @@
+# The stateless setup, as on DigitalOcean App Platform: two server instances that keep nothing on disk,
+# with Postgres for users, devices and metadata, an S3-compatible bucket for the database files, and
+# nginx spreading requests across the instances. Versity Gateway stands in for DigitalOcean Spaces.
+#
+#   docker compose -f compose.cloud.yaml up -d --build
+#   docker compose -f compose.cloud.yaml run --rm migrate users add alice laptop
+#   docker compose -f compose.cloud.yaml run --rm migrate devices pair alice
+#
+#   # Copy an existing data directory (users, devices, databases with history) into Postgres and the bucket
+#   docker compose -f compose.cloud.yaml run --rm -v "$PWD/data:/import:ro" migrate import /import
+#
+#   # The API tests against Postgres and the bucket
+#   docker compose -f compose.cloud.yaml run --rm --build test
+#
+# The server is on http://127.0.0.1:8787. The credentials below are for local use only.
+
+name: keepassxc-sync-cloud
+
+x-sync-environment: &sync-environment
+  SYNC_DATABASE_URL: postgresql://sync:sync@postgres:5432/sync
+  SYNC_S3_ENDPOINT: http://s3:7070
+  SYNC_S3_REGION: us-east-1
+  SYNC_S3_BUCKET: keepassxc-sync
+  SYNC_S3_ACCESS_KEY: local-access-key
+  SYNC_S3_SECRET_KEY: local-secret-key
+  SYNC_S3_PATH_STYLE: "1"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sync
+      POSTGRES_PASSWORD: sync
+      POSTGRES_DB: sync
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "sync", "-d", "sync"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres:/var/lib/postgresql/data
+
+  s3:
+    image: versity/versitygw:v1.9.0
+    restart: unless-stopped
+    # Each directory under /gw is a bucket
+    entrypoint:
+      - /bin/sh
+      - -c
+      - mkdir -p /gw/keepassxc-sync && exec versitygw --access local-access-key --secret local-secret-key --port :7070 posix /gw
+    volumes:
+      - s3:/gw
+
+  # Applies the schema and exits; the instances wait for it. Also the place to run CLI commands.
+  migrate:
+    build:
+      context: .
+      target: runtime
+    image: keepassxc-sync-server
+    command: ["migrate"]
+    environment: *sync-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  sync-server:
+    build:
+      context: .
+      target: runtime
+    image: keepassxc-sync-server
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+    environment:
+      <<: *sync-environment
+      SYNC_BEHIND_PROXY: "1"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      s3:
+        condition: service_started
+
+  lb:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      # SYNC_HOST_PORT picks another port on the host
+      - "127.0.0.1:${SYNC_HOST_PORT:-8787}:8787"
+    configs:
+      - source: nginx
+        target: /etc/nginx/nginx.conf
+    depends_on:
+      - sync-server
+
+  test:
+    profiles: ["test"]
+    build:
+      context: .
+      target: test
+    image: keepassxc-sync-server-test
+    environment: *sync-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      s3:
+        condition: service_started
+
+configs:
+  nginx:
+    content: |
+      events {}
+      http {
+        # Docker's DNS returns every replica; nginx takes turns between them
+        upstream sync {
+          server sync-server:8787;
+        }
+        server {
+          listen 8787;
+          # SYNC_MAX_DB_BYTES, 50 MiB by default
+          client_max_body_size 50m;
+          location / {
+            proxy_pass http://sync;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $$host;
+            # Server-sent events (GET /api/v1/events) must not be buffered or cut off
+            proxy_buffering off;
+            proxy_read_timeout 1h;
+          }
+        }
+      }
+
+volumes:
+  postgres:
+  s3:

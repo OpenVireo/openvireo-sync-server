@@ -1,6 +1,11 @@
 #include "Config.h"
+#include "Storage.h"
 #include "SyncApi.h"
-#include "UserStore.h"
+
+#ifdef SYNC_SERVER_WITH_CLOUD
+#include "Import.h"
+#include "PgDatabaseRepository.h"
+#endif
 
 #include <drogon/drogon.h>
 
@@ -10,13 +15,14 @@
 
 namespace
 {
-    constexpr const char* USAGE = R"(Usage: keepassxc-sync-server [users|devices <command> ...]
+    constexpr const char* USAGE =
+        R"(Usage: keepassxc-sync-server [users|devices <command> ... | migrate | import <data-dir> | sweep]
 
 Without arguments, runs the sync server.
 
 User commands:
   users add <name> [device-name]     Create a user with a first device and print its access token
-  users remove <name>                Delete a user and their devices (stored databases are kept on disk)
+  users remove <name>                Delete a user and their devices (their stored databases are kept)
   users list                         List users
 
 Device commands (each device has its own access token):
@@ -26,7 +32,14 @@ Device commands (each device has its own access token):
   devices list <user>                List a user's devices
   devices revoke <user> <device-id>  Revoke a device; its token stops working at once
 
-Uses SYNC_DATA_DIR (default: ./data) to locate users.json.)";
+Storage commands (Postgres and a bucket, see SYNC_DATABASE_URL):
+  migrate                            Create or upgrade the tables and exit, e.g. as a pre-deploy job
+  import <data-dir>                  Copy a data directory's users, devices and databases (with their
+                                     kept versions, revisions and ETags) into Postgres and the bucket
+  sweep                              Delete files in the bucket that no database version refers to
+
+Commands use the same storage as the server: Postgres when SYNC_DATABASE_URL is set, otherwise
+SYNC_DATA_DIR (default: ./data).)";
 
     void printToken(const std::string& user, const std::string& device, const std::string& token)
     {
@@ -34,9 +47,8 @@ Uses SYNC_DATA_DIR (default: ./data) to locate users.json.)";
                   << "\" (shown only once, enter it in KeePassXC on that device):\n\n  " << token << "\n\n";
     }
 
-    int manageUsers(const syncserver::Config& config, const std::vector<std::string>& args)
+    int manageUsers(syncserver::UserRepository& users, const std::vector<std::string>& args)
     {
-        syncserver::UserStore users(config.dataDir);
         const auto& command = args.at(0);
 
         if (command == "add" && (args.size() == 2 || args.size() == 3)) {
@@ -62,9 +74,8 @@ Uses SYNC_DATA_DIR (default: ./data) to locate users.json.)";
         return 2;
     }
 
-    int manageDevices(const syncserver::Config& config, const std::vector<std::string>& args)
+    int manageDevices(syncserver::UserRepository& users, const std::vector<std::string>& args)
     {
-        syncserver::UserStore users(config.dataDir);
         const auto& command = args.at(0);
 
         if (command == "add" && args.size() == 3) {
@@ -103,6 +114,48 @@ Uses SYNC_DATA_DIR (default: ./data) to locate users.json.)";
     {
         return host == "127.0.0.1" || host == "localhost" || host == "::1";
     }
+
+    int
+    manageStorage(const syncserver::Config& config, const std::string& command, const std::vector<std::string>& args)
+    {
+        if (!config.usesPostgres()) {
+            std::cerr << command << " works with Postgres and a bucket only: set SYNC_DATABASE_URL and SYNC_S3_*\n";
+            return 2;
+        }
+#ifdef SYNC_SERVER_WITH_CLOUD
+        if (command == "migrate" && args.empty()) {
+            // Opening the storage applies the migrations
+            auto storage = syncserver::openStorage(config);
+            std::cout << "The schema in " << storage.description << " is up to date.\n";
+            return 0;
+        }
+        if (command == "import" && args.size() == 1) {
+            auto storage = syncserver::openStorage(config);
+            if (!syncserver::importDataDirectory(args[0], storage, std::cout)) {
+                std::cerr << "Some users or databases already existed and were not copied.\n";
+                return 1;
+            }
+            return 0;
+        }
+        if (command == "sweep" && args.empty()) {
+            auto storage = syncserver::openStorage(config);
+            auto databases = std::dynamic_pointer_cast<syncserver::PgDatabaseRepository>(storage.databases);
+            auto removed = databases->sweep();
+            if (!removed) {
+                std::cerr << "Another instance is sweeping right now.\n";
+                return 1;
+            }
+            std::cout << "Deleted " << *removed << " unreferenced file(s).\n";
+            return 0;
+        }
+        std::cerr << USAGE << "\n";
+        return 2;
+#else
+        (void)args;
+        std::cerr << "This build has no Postgres and S3 support.\n";
+        return 2;
+#endif
+    }
 } // namespace
 
 int main(int argc, char* argv[])
@@ -113,24 +166,35 @@ int main(int argc, char* argv[])
         if (argc > 1) {
             const std::string group = argv[1];
             const std::vector<std::string> args(argv + 2, argv + argc);
+            if (group == "migrate" || group == "import" || group == "sweep") {
+                return manageStorage(config, group, args);
+            }
             if (args.empty() || (group != "users" && group != "devices")) {
                 std::cerr << USAGE << "\n";
                 return 2;
             }
-            return group == "users" ? manageUsers(config, args) : manageDevices(config, args);
+            auto storage = syncserver::openStorage(config);
+            return group == "users" ? manageUsers(*storage.users, args) : manageDevices(*storage.users, args);
         }
 
-        syncserver::registerSyncApi(config);
+        auto storage = syncserver::openStorage(config);
+        const auto description = storage.description;
+#ifdef SYNC_SERVER_WITH_CLOUD
+        if (auto databases = std::dynamic_pointer_cast<syncserver::PgDatabaseRepository>(storage.databases)) {
+            databases->startPeriodicSweep(std::chrono::hours(6));
+        }
+#endif
+        syncserver::registerSyncApi(config, std::move(storage));
         drogon::app()
             .setLogLevel(trantor::Logger::kWarn)
             .setThreadNum(config.threads)
             .addListener(config.host, config.port)
-            .registerBeginningAdvice([config] {
+            .registerBeginningAdvice([config, description] {
                 std::cout << "KeePassXC sync server listening on http://" << config.host << ":" << config.port
-                          << "\nData directory: " << config.dataDir.string() << std::endl;
-                if (!isLoopback(config.host)) {
+                          << "\nStorage: " << description << std::endl;
+                if (!isLoopback(config.host) && !config.behindProxy) {
                     std::cerr << "Warning: listening on a non-loopback address. Put the server behind HTTPS "
-                                 "(e.g. a reverse proxy)."
+                                 "(e.g. a reverse proxy) and set SYNC_BEHIND_PROXY=1."
                               << std::endl;
                 }
             })

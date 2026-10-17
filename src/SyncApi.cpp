@@ -1,7 +1,5 @@
 #include "SyncApi.h"
 
-#include "DatabaseStore.h"
-#include "UserStore.h"
 #include "Util.h"
 
 #include <drogon/drogon.h>
@@ -215,11 +213,15 @@ namespace syncserver
         class SyncApi
         {
         public:
-            explicit SyncApi(const Config& config)
-                : m_users(config.dataDir)
-                , m_store(config.dataDir, config.historySize)
+            explicit SyncApi(Storage storage)
+                : m_storage(std::move(storage))
+                , m_users(*m_storage.users)
+                , m_store(*m_storage.databases)
                 , m_events(std::make_shared<EventHub>())
             {
+                m_store.setChangeListener([events = m_events](const std::string& user, const Json::Value& event) {
+                    events->publish(user, event);
+                });
             }
 
             std::shared_ptr<EventHub> events() const
@@ -356,11 +358,6 @@ namespace syncserver
 
                 auto result =
                     m_store.write(user, id, data, [&](const auto& current) { checkWritePreconditions(req, current); });
-                Json::Value event;
-                event["id"] = id;
-                event["etag"] = result.meta.etag;
-                event["revision"] = static_cast<Json::Int64>(result.meta.revision);
-                m_events->publish(user, event);
                 auto resp = jsonResponse(result.created ? k201Created : k200OK, result.meta.toJson());
                 setMetaHeaders(resp, result.meta);
                 return resp;
@@ -377,10 +374,6 @@ namespace syncserver
                 if (!removed) {
                     throw HttpError(k404NotFound, "Database not found.");
                 }
-                Json::Value event;
-                event["id"] = id;
-                event["deleted"] = true;
-                m_events->publish(user, event);
                 return HttpResponse::newHttpResponse(k204NoContent, CT_NONE);
             }
 
@@ -449,8 +442,9 @@ namespace syncserver
             // Codes have 40 bits; ten wrong guesses per address and a hundred in all per ten
             // minutes leave no time to find one before it expires
             FailureLimiter m_pairingFailures{10, 100, std::chrono::minutes(10)};
-            UserStore m_users;
-            DatabaseStore m_store;
+            Storage m_storage;
+            UserRepository& m_users;
+            DatabaseRepository& m_store;
             std::shared_ptr<EventHub> m_events;
         };
 
@@ -469,9 +463,9 @@ namespace syncserver
         }
     } // namespace
 
-    void registerSyncApi(const Config& config)
+    void registerSyncApi(const Config& config, Storage storage)
     {
-        auto api = std::make_shared<SyncApi>(config);
+        auto api = std::make_shared<SyncApi>(std::move(storage));
         auto& app = drogon::app();
 
         app.enableServerHeader(false)

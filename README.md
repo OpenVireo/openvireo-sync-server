@@ -9,7 +9,7 @@ The server only ever sees the **encrypted** `.kdbx` file. KeePassXC downloads it
 The server is written in C++17 on [Drogon](https://github.com/drogonframework/drogon).
 
 ```sh
-brew install drogon            # or: apt install libdrogon-dev, vcpkg install drogon, …
+brew install drogon sqlite     # or: apt install libdrogon-dev libsqlite3-dev, vcpkg install drogon sqlite3, …
 cd sync_server
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
@@ -65,10 +65,90 @@ Set these as environment variables:
 |---|---|---|
 | `SYNC_HOST` | `127.0.0.1` | Address to listen on |
 | `SYNC_PORT` | `8787` | Port |
-| `SYNC_DATA_DIR` | `./data` | Where users and databases are stored (relative to the working directory) |
+| `SYNC_DATA_DIR` | `./data` | Where users and databases are stored (relative to the working directory), unless `SYNC_DATABASE_URL` is set |
 | `SYNC_MAX_DB_BYTES` | `52428800` | Upload size limit (50 MiB) |
 | `SYNC_HISTORY_SIZE` | `10` | How many previous versions of each database to keep |
 | `SYNC_THREADS` | `0` | Number of I/O threads, `0` means one per CPU core |
+| `SYNC_BEHIND_PROXY` | `0` | `1` silences the warning about listening on a non-loopback address, when TLS is terminated in front of the server |
+
+### Storage
+
+There are two ways to store users and databases:
+
+- **Data directory** (the default): everything lives in `SYNC_DATA_DIR`: users, devices and pairing codes in
+  `users.sqlite`, and one folder of `.kdbx` files per user. One server process, nothing else to run. A
+  `users.json` from an older server is copied into `users.sqlite` on the first start and renamed to
+  `users.json.imported`; old tokens keep working.
+- **Postgres and an S3-compatible bucket**: users, devices, pairing codes and database metadata live in Postgres,
+  the encrypted `.kdbx` files in a bucket (DigitalOcean Spaces, AWS S3, …). The server keeps nothing on its own
+  disk, so containers can be replaced at will and several instances can run behind a load balancer: Postgres
+  decides every upload, so two devices uploading at once through different instances still can't overwrite each
+  other, and change notifications reach devices connected to any instance (through `LISTEN`/`NOTIFY`).
+
+Setting `SYNC_DATABASE_URL` picks the second; it then needs all of these:
+
+| Variable | Meaning |
+|---|---|
+| `SYNC_DATABASE_URL` | Postgres connection string, e.g. `postgresql://user:password@host:25060/db?sslmode=require` |
+| `SYNC_DATABASE_SCHEMA` | Schema for the tables, created if missing (default: the connection's, usually `public`) |
+| `SYNC_DATABASE_CONNECTIONS` | Connections per instance (default: one per I/O thread) |
+| `SYNC_S3_ENDPOINT` | e.g. `https://nyc3.digitaloceanspaces.com` |
+| `SYNC_S3_REGION` | e.g. `nyc3` |
+| `SYNC_S3_BUCKET` | Bucket name |
+| `SYNC_S3_PREFIX` | Optional key prefix, so several servers can share a bucket, e.g. `keepassxc/` |
+| `SYNC_S3_ACCESS_KEY`, `SYNC_S3_SECRET_KEY` | Access key for the bucket |
+| `SYNC_S3_PATH_STYLE` | `1` for `endpoint/bucket/key` URLs instead of `bucket.endpoint/key` (MinIO, Versity Gateway, …) |
+
+The server creates and upgrades its tables when it starts (instances starting together take turns), or run
+`keepassxc-sync-server migrate`. Every few hours one instance deletes files in the bucket that no version
+refers to any more, left behind by uploads that lost a race or crashed; `keepassxc-sync-server sweep` does it
+at once.
+
+The `users` and `devices` commands work on whichever storage is configured. With Postgres you can run them
+from any machine or one-off container with the same settings, and the running instances see the change at
+once.
+
+To move from a data directory to Postgres, run `keepassxc-sync-server import <data-dir>` with the Postgres
+settings. It copies users, devices (old per-user tokens included), databases and their kept versions, keeping
+revisions and ETags, so devices carry on syncing without noticing. It leaves users and databases that already
+exist alone and says so.
+
+Postgres and S3 support needs Drogon built with PostgreSQL (`-DBUILD_POSTGRESQL=ON`), which Homebrew's and
+most distributions' packages are not; CMake turns it on when it finds such a Drogon
+(`-DSYNC_SERVER_WITH_CLOUD=ON` makes it required). The Docker image always has it.
+
+### Docker
+
+```sh
+cd sync_server
+docker compose up -d --build                                  # data directory in a volume, on 127.0.0.1:8787
+docker compose run --rm sync-server users add alice laptop
+```
+
+`compose.cloud.yaml` runs the stateless setup locally: Postgres, an S3 gateway standing in for Spaces, two
+server instances and nginx in front of them:
+
+```sh
+docker compose -f compose.cloud.yaml up -d --build
+docker compose -f compose.cloud.yaml run --rm migrate users add alice laptop
+docker compose -f compose.cloud.yaml run --rm --build test    # the API tests against Postgres and the bucket
+```
+
+`SYNC_HOST_PORT=18787` publishes either on another port. The image runs as an unprivileged user (uid 10001),
+listens on `0.0.0.0:8787` and keeps the data directory in `/data`; a bind-mounted directory must be writable
+by that uid.
+
+### DigitalOcean App Platform
+
+`.do/app.yaml` deploys two instances from the Dockerfile with a managed Postgres database and a Spaces
+bucket. Create the bucket and a Spaces access key first, fill in the placeholders, then:
+
+```sh
+doctl apps create --spec sync_server/.do/app.yaml
+```
+
+App Platform terminates HTTPS. Add users from the app's console (`keepassxc-sync-server users add alice
+laptop`) or from any machine with the same `SYNC_*` settings.
 
 ### Deploying beyond localhost
 
@@ -96,8 +176,8 @@ KeePassXC does not follow redirects, so the token is never forwarded to another 
 ```
 
 Each user has their own namespace and cannot see other users' databases. All of a user's devices see the same
-databases. Only SHA-256 hashes of tokens and pairing codes are stored, in `data/users.json`. Changes to that file take effect without a
-restart.
+databases. Only SHA-256 hashes of tokens and pairing codes are stored, in `data/users.sqlite` (or in Postgres). Changes take effect
+without a restart.
 
 A device was lost? Revoke it. Its token can no longer reach the server. If whoever has it may also know the
 database's password, change that password too, so copies uploaded from now on can't be opened with the old one.

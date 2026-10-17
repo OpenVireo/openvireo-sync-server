@@ -1,0 +1,61 @@
+# DigitalOcean App Platform: stateless instances with a managed Postgres database and a Spaces bucket.
+#
+#   doctl apps create --spec sync_server/.do/app.yaml
+#
+# Before applying:
+#   - set the GitHub repository and branch below (or deploy a prebuilt image, see the comment),
+#   - create the Spaces bucket and an access key for it, and fill in the SYNC_S3_* values,
+#   - set cluster_name to your managed Postgres cluster (or remove `production` and `cluster_name` for a
+#     development database).
+# The instances apply the schema when they start, under a lock, so no pre-deploy job is needed. Add users
+# from the app's console: keepassxc-sync-server users add alice laptop
+
+name: keepassxc-sync
+region: nyc
+
+services:
+  - name: sync-server
+    # Built from the Dockerfile on each deploy. To deploy a prebuilt image instead, replace github,
+    # source_dir and dockerfile_path with:
+    #   image:
+    #     registry_type: GHCR
+    #     registry: <owner>
+    #     repository: keepassxc-sync-server
+    #     tag: latest
+    github:
+      repo: <owner>/keepassxc
+      branch: develop
+      deploy_on_push: true
+    source_dir: sync_server
+    dockerfile_path: sync_server/Dockerfile
+    http_port: 8787
+    instance_count: 2
+    instance_size_slug: apps-s-1vcpu-1gb
+    health_check:
+      http_path: /api/v1/health
+    envs:
+      - key: SYNC_DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      # App Platform terminates TLS in front of the instances
+      - key: SYNC_BEHIND_PROXY
+        value: "1"
+      - key: SYNC_S3_ENDPOINT
+        value: https://nyc3.digitaloceanspaces.com
+      - key: SYNC_S3_REGION
+        value: nyc3
+      - key: SYNC_S3_BUCKET
+        value: <bucket name>
+      - key: SYNC_S3_ACCESS_KEY
+        type: SECRET
+        value: <spaces access key>
+      - key: SYNC_S3_SECRET_KEY
+        type: SECRET
+        value: <spaces secret key>
+
+databases:
+  - name: db
+    engine: PG
+    version: "17"
+    production: true
+    cluster_name: <postgres cluster name>
