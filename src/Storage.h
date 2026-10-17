@@ -193,6 +193,18 @@ namespace syncserver
         // Changes from every instance sharing this storage, not only this one
         virtual void setChangeListener(ChangeListener listener) = 0;
 
+        // Hands a message to the broadcast listener of every instance sharing this storage (this one included),
+        // e.g. an access change from the auth server for streams connected to other instances. Best effort.
+        using BroadcastListener = std::function<void(const Json::Value& message)>;
+        virtual void broadcast(const Json::Value& message) = 0;
+        // Set before setChangeListener()
+        virtual void setBroadcastListener(BroadcastListener listener) = 0;
+
+        // Copies a database with its kept versions (the current one first, then older ones), keeping revisions,
+        // ETags and times; false when it already exists. Sends no change event.
+        virtual bool
+        importDatabase(const std::string& user, const std::string& id, const std::vector<Entry>& versions) = 0;
+
         // {"id", "etag", "revision"} after an upload, {"id", "deleted": true} after a delete
         static Json::Value changeEvent(const DatabaseMeta& meta);
         static Json::Value deletedEvent(const std::string& id);
@@ -201,12 +213,19 @@ namespace syncserver
     struct Storage
     {
         std::shared_ptr<UserRepository> users;
+        // Legacy databases, per user (databases/{id} of a device token's user)
         std::shared_ptr<DatabaseRepository> databases;
+        // Account vaults (vaults/{id}), in a namespace of their own that never shares a key with a user's
+        // databases. Vault ids are global, so every call passes VaultScope as the user.
+        std::shared_ptr<DatabaseRepository> vaults;
         // Something to keep alive with the repositories, such as shared connections
         std::shared_ptr<void> backend;
         // Human-readable, for the startup message
         std::string description;
     };
+
+    // The "user" of every vault in Storage::vaults
+    inline const std::string VaultScope;
 
     // Postgres and S3 when SYNC_DATABASE_URL is set, otherwise the data directory
     Storage openStorage(const Config& config);

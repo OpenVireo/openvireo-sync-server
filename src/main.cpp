@@ -1,4 +1,5 @@
 #include "Config.h"
+#include "Migrate.h"
 #include "Storage.h"
 #include "SyncApi.h"
 
@@ -16,7 +17,8 @@
 namespace
 {
     constexpr const char* USAGE =
-        R"(Usage: keepassxc-sync-server [users|devices <command> ... | migrate | import <data-dir> | sweep]
+        R"(Usage: keepassxc-sync-server [users|devices <command> ... | migrate | import <data-dir> | sweep |
+                             migrate-to-vaults <user> <database-id> <vault-uuid>]
 
 Without arguments, runs the sync server.
 
@@ -37,6 +39,13 @@ Storage commands (Postgres and a bucket, see SYNC_DATABASE_URL):
   import <data-dir>                  Copy a data directory's users, devices and databases (with their
                                      kept versions, revisions and ETags) into Postgres and the bucket
   sweep                              Delete files in the bucket that no database version refers to
+
+Account commands (either storage):
+  migrate-to-vaults <user> <database-id> <vault-uuid>
+                                     Move a user's database, with its kept versions, revisions and ETags,
+                                     to the account vault vaults/<vault-uuid> (the vault id the auth server
+                                     gave it) and delete the user's copy. With the data directory, stop the
+                                     server first.
 
 Commands use the same storage as the server: Postgres when SYNC_DATABASE_URL is set, otherwise
 SYNC_DATA_DIR (default: ./data).)";
@@ -168,6 +177,20 @@ int main(int argc, char* argv[])
             const std::vector<std::string> args(argv + 2, argv + argc);
             if (group == "migrate" || group == "import" || group == "sweep") {
                 return manageStorage(config, group, args);
+            }
+            if (group == "migrate-to-vaults") {
+                if (args.size() != 3) {
+                    std::cerr << USAGE << "\n";
+                    return 2;
+                }
+                auto storage = syncserver::openStorage(config);
+                try {
+                    syncserver::migrateToVault(storage, args[0], args[1], args[2], std::cout);
+                } catch (const std::invalid_argument& e) {
+                    std::cerr << e.what() << "\n";
+                    return 1;
+                }
+                return 0;
             }
             if (args.empty() || (group != "users" && group != "devices")) {
                 std::cerr << USAGE << "\n";

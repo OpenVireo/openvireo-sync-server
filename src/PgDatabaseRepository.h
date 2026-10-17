@@ -20,13 +20,24 @@ namespace syncserver
      * a row lock on the database replaces the in-process lock, so several instances can serve the same
      * databases. Blob keys are never reused, so a reader never sees a partly written or replaced blob:
      *   <prefix><user>/<id>/<sha256>-<random>.kdbx
+     *
+     * Account vaults (Namespace::Vaults) live in tables of their own, vaults and vault_versions, with the
+     * empty scope (VaultScope) in place of a user, and blobs under a prefix no user name can start with:
+     *   <prefix>_vaults/<uuid>/<sha256>-<random>.kdbx
      */
     class PgDatabaseRepository : public DatabaseRepository
     {
     public:
+        enum class Namespace
+        {
+            Databases,
+            Vaults,
+        };
+
         PgDatabaseRepository(std::shared_ptr<Postgres> postgres,
                              std::shared_ptr<BlobStore> blobs,
-                             unsigned historySize);
+                             unsigned historySize,
+                             Namespace ns = Namespace::Databases);
         ~PgDatabaseRepository() override;
 
         std::optional<DatabaseMeta> meta(const std::string& user, const std::string& id) override;
@@ -43,6 +54,9 @@ namespace syncserver
 
         // Listens for changes from every instance through Postgres LISTEN/NOTIFY
         void setChangeListener(ChangeListener listener) override;
+        // Through Postgres NOTIFY, so it reaches every instance
+        void broadcast(const Json::Value& message) override;
+        void setBroadcastListener(BroadcastListener listener) override;
 
         // Deletes blobs that no row references and that are older than minAge (younger ones may belong to a
         // commit in progress). nullopt when another instance is sweeping.
@@ -52,13 +66,23 @@ namespace syncserver
 
         // Copies a database with its kept versions (newest first, the current one first), keeping revisions
         // and ETags; false when it already exists
-        bool importDatabase(const std::string& user, const std::string& id, const std::vector<Entry>& versions);
+        bool
+        importDatabase(const std::string& user, const std::string& id, const std::vector<Entry>& versions) override;
 
     private:
         std::string newBlobKey(const std::string& user, const std::string& id, const std::string& etag) const;
         void notify(drogon::orm::Transaction& trans, const std::string& user, const Json::Value& event);
         void removeBlobs(const std::vector<std::string>& keys);
 
+        // Marks notifications of this namespace; legacy databases send none, as before
+        std::string notifyNamespace() const;
+
+        Namespace m_ns;
+        std::string m_table;
+        std::string m_versions;
+        std::string m_owner;
+        std::string m_keyPrefix;
+        BroadcastListener m_broadcastListener;
         std::shared_ptr<Postgres> m_pg;
         std::shared_ptr<BlobStore> m_blobs;
         unsigned m_historySize;

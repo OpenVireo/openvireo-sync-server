@@ -59,6 +59,30 @@ namespace syncserver
                        PRIMARY KEY (user_name, id, revision)
                    ))",
             },
+            // Account vaults: shared by their members, so not under a user. scope is always '' for now; it
+            // keeps the key shape of the databases tables so both use the same code.
+            {
+                R"(CREATE TABLE vaults (
+                       scope       text NOT NULL DEFAULT '',
+                       id          text NOT NULL,
+                       revision    bigint NOT NULL,
+                       etag        text NOT NULL,
+                       size        bigint NOT NULL,
+                       blob_key    text NOT NULL,
+                       updated_at  timestamptz NOT NULL,
+                       PRIMARY KEY (scope, id)
+                   ))",
+                R"(CREATE TABLE vault_versions (
+                       scope       text NOT NULL DEFAULT '',
+                       id          text NOT NULL,
+                       revision    bigint NOT NULL,
+                       etag        text NOT NULL,
+                       size        bigint NOT NULL,
+                       blob_key    text NOT NULL,
+                       updated_at  timestamptz NOT NULL,
+                       PRIMARY KEY (scope, id, revision)
+                   ))",
+            },
         };
 
         bool isUri(const std::string& url)

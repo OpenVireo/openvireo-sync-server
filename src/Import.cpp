@@ -53,6 +53,26 @@ namespace syncserver
                 }
             }
         }
+
+        // Account vaults of a data directory, if it has any
+        auto vaults = std::dynamic_pointer_cast<PgDatabaseRepository>(target.vaults);
+        DatabaseStore sourceVaults(dataDir, std::numeric_limits<unsigned>::max(), DatabaseStore::VaultsFolder);
+        for (const auto& meta : sourceVaults.list(VaultScope)) {
+            std::vector<DatabaseRepository::Entry> versions;
+            for (const auto& version :
+                 sourceVaults.history(VaultScope, meta.id).value_or(std::vector<DatabaseMeta>{})) {
+                if (auto entry = sourceVaults.readRevision(VaultScope, meta.id, version.revision)) {
+                    versions.push_back(std::move(*entry));
+                }
+            }
+            if (vaults && vaults->importDatabase(VaultScope, meta.id, versions)) {
+                out << "Vault " << meta.id << ": revision " << meta.revision << ", " << versions.size() - 1
+                    << " kept version(s)\n";
+            } else {
+                out << "Vault " << meta.id << ": already exists, skipped\n";
+                complete = false;
+            }
+        }
         return complete;
     }
 } // namespace syncserver
