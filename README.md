@@ -71,6 +71,11 @@ Set these as environment variables:
 | `SYNC_HISTORY_SIZE` | `10` | How many previous versions of each database to keep |
 | `SYNC_THREADS` | `0` | Number of I/O threads, `0` means one per CPU core |
 | `SYNC_BEHIND_PROXY` | `0` | `1` silences the warning about listening on a non-loopback address, when TLS is terminated in front of the server |
+| `SYNC_ALLOWED_ORIGINS` | *(none)* | Comma-separated web origins allowed to call the API from a browser (CORS), e.g. `https://app.example.org`; `*` allows any. See [Web apps](#web-apps-cors) |
+| `SYNC_AUTH_MODE` | `legacy` | Which tokens the server accepts: `legacy`, `jwt` or `both`. See [Accounts](#accounts-jwt-and-vaults) |
+
+The account variables (`SYNC_AUTH_JWKS_URL`, `SYNC_AUTH_ISSUER`, `SYNC_AUTH_AUDIENCE`, `SYNC_INTERNAL_TOKEN`) are
+described under [Accounts](#accounts-jwt-and-vaults). A self-hosted server needs none of them.
 
 ### Storage
 
@@ -253,8 +258,133 @@ connections open. KeePassXC listens while automatic sync is on, syncs as soon as
 every 5 minutes while it is connected (every minute otherwise). Behind a reverse proxy, make sure it doesn't buffer
 responses (the server sends `X-Accel-Buffering: no` for nginx) and allows long-lived requests.
 
+## Web apps (CORS)
+
+A browser only lets a web app on another origin call the server when the server allows that origin. List the origins
+in `SYNC_ALLOWED_ORIGINS`, separated by commas (no path or trailing slash). For those origins the server answers
+preflight (`OPTIONS`) requests on every route with `204`, allowing `GET, HEAD, PUT, POST, DELETE` and the headers
+`Authorization, Content-Type, If-Match, If-None-Match`, and every response carries `Access-Control-Allow-Origin` and
+`Access-Control-Expose-Headers: ETag, X-Database-Revision, Last-Modified`, so the app can read ETags. Tokens travel in
+the `Authorization` header, never in cookies, so credentials mode is not used. With the variable unset (the default)
+the server sends no CORS headers at all.
+
+**Using a self-hosted server from the hosted web app:** set `SYNC_ALLOWED_ORIGINS` to the origin the web app is
+served from (the address in the browser's address bar, scheme and host only), keep `SYNC_AUTH_MODE` at `legacy`, and
+pick *Use my own sync server* in the web app with your server's URL and a pairing code. The server must be reachable
+over **HTTPS** (see [Deploying beyond localhost](#deploying-beyond-localhost)): a page served over HTTPS can't call a
+plain `http://` server, except one on `localhost`. A server on `localhost` or the local network also works with
+Chrome's Private Network Access checks: preflights asking for it get `Access-Control-Allow-Private-Network: true`. If a
+reverse proxy answers `OPTIONS` itself, let it pass those requests through.
+
+```sh
+SYNC_ALLOWED_ORIGINS=https://app.example.org ./build/keepassxc-sync-server
+```
+
+## Accounts (JWT) and vaults
+
+With an account server (`keepassxc-auth`), clients authenticate with short-lived **access tokens** (JWT, signed
+with Ed25519) instead of device tokens, and databases become **vaults**: one encrypted `.kdbx` per vault, shared by
+everyone the account server grants access to. This is off unless `SYNC_AUTH_MODE` says otherwise; a self-hosted
+server stays exactly as described above.
+
+| `SYNC_AUTH_MODE` | Accepted tokens | Routes |
+|---|---|---|
+| `legacy` (default) | device tokens | `databases/*`, `devices/pairing*`, `events` |
+| `jwt` | access tokens | `vaults`, `vaults/*`, `events`, `internal/notify` |
+| `both` | either; a token with two `.` is an access token | all of the above |
+
+Routes a mode doesn't have answer `404`. In `both` mode, an access token on a legacy route, or a device token on a
+vault route, gets `403`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SYNC_AUTH_JWKS_URL` | *(required for `jwt`/`both`)* | The account server's `/.well-known/jwks.json` |
+| `SYNC_AUTH_ISSUER` | *(required for `jwt`/`both`)* | Its issuer URL, the tokens' `iss` (as in its `/.well-known/kpx-configuration`) |
+| `SYNC_AUTH_AUDIENCE` | `kpx-sync` | The audience every token's `aud` must contain |
+| `SYNC_INTERNAL_TOKEN` | *(none)* | Shared secret the account server uses for `POST /api/v1/internal/notify`. Unset: that route is off (`404`) |
+
+The server accepts only `EdDSA` tokens and checks the signature, `iss`, `aud`, `exp` and `nbf` (with 60 seconds of
+clock skew). It fetches the JWKS on first use and caches it, fetches it again when a token names a key id it doesn't
+know (at most once every 30 seconds) and refreshes it hourly, so a key rollover on the account server needs no
+restart. The token's `vlt` claim lists the vaults it opens and the role for each: `read` < `write` < `manage`.
+
+For the hosted setup:
+
+```sh
+SYNC_AUTH_MODE=both \
+SYNC_AUTH_JWKS_URL=https://accounts.example.org/.well-known/jwks.json \
+SYNC_AUTH_ISSUER=https://accounts.example.org \
+SYNC_INTERNAL_TOKEN=<random secret shared with the account server> \
+SYNC_ALLOWED_ORIGINS=https://app.example.org \
+./build/keepassxc-sync-server
+```
+
+### Vault routes
+
+`{vault}` is the vault's id, a lowercase UUID. Errors on these routes also carry a machine-readable code:
+`{"error": "...", "code": "forbidden"}` (`unauthorized`, `forbidden`, `not_found`, `invalid_request`,
+`precondition_failed`, `precondition_required`).
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/vaults` | any | `{"vaults": [{id, revision, etag, size, updatedAt}]}` for the token's vaults that exist |
+| `GET` / `HEAD` | `/api/v1/vaults/{vault}` | read | Download, with `ETag`, `X-Database-Revision`, `Last-Modified`; `If-None-Match` gives `304` |
+| `PUT` | `/api/v1/vaults/{vault}` | write / manage | `If-Match: "<etag>"` updates (write, `200`); `If-None-Match: *` creates (manage, `201`) |
+| `DELETE` | `/api/v1/vaults/{vault}` | manage | Delete the vault and its history (`204`); supports `If-Match` |
+| `GET` | `/api/v1/vaults/{vault}/history` | read | Kept versions, as for databases |
+| `GET` | `/api/v1/vaults/{vault}/history/{revision}` | read | One kept version |
+
+A vault the token doesn't list gets `403`, whether it exists or not. Conditional uploads work as for databases
+(`412` on a mismatch), except that a vault `PUT` without `If-Match` or `If-None-Match` always gets `428`, even for a
+vault that doesn't exist yet.
+
+### Account events
+
+`GET /api/v1/events` with an access token sends
+
+```
+event: vault
+data: {"id":"<vault>","etag":"\"…\"","revision":3}        (or {"id":"<vault>","deleted":true})
+
+event: access
+data: {"change":"granted","vault":"<vault>"}               (vault may be null)
+```
+
+`vault` events only for the vaults in the token, `access` events when the account server reports an access change
+for the token's subject. The server ends the stream once the token's `exp` has passed (checked every second); the
+client reconnects with a fresh token, and does the same after any `access` event. Device-token streams keep sending
+`event: database` as before.
+
+The account server sends `access` events with `POST /api/v1/internal/notify`, `Authorization: Bearer
+<SYNC_INTERNAL_TOKEN>` and `{"subjects": ["user:<uuid>", "sa:<uuid>"], "event": "access", "data": {"vault": <uuid or
+null>, "change": "granted"|"revoked"|"rotating"|"rotated"|"org"}}`, answered with `204`. Delivery is best effort.
+With Postgres the event reaches streams on every instance (through `NOTIFY`).
+
+### Storage of vaults
+
+Vaults never share a storage key with a user's databases: in the data directory they live in `vaults/<uuid>.kdbx`
+(next to `databases/`), with history in `vaults/.history/<uuid>/`; with Postgres in the tables `vaults` and
+`vault_versions` (created by the server's migrations), with files under `_vaults/<uuid>/` in the bucket, a prefix no
+user name can have. `import <data-dir>` also copies a data directory's vaults.
+
+To turn a user's database into a vault (for a user moving from a device token to an account), take the vault id
+from the account server and run
+
+```sh
+./build/keepassxc-sync-server migrate-to-vaults <user> <database-id> <vault-uuid>
+```
+
+It copies the database with its kept versions, revisions and ETags to `vaults/<vault-uuid>` and then deletes the
+user's copy (devices of that user see it deleted). It refuses when the vault already exists and leaves everything as
+it was if the database changes while it is copied. It works with either storage; with the data directory, stop the
+server while it runs.
+
 ## Tests
 
 ```sh
-cmake --build build && ./build/sync_server_test     # or: ctest --test-dir build
+cmake --build build && ctest --test-dir build --output-on-failure
 ```
+
+`sync_server_test` covers the legacy API, `sync_server_jwt_test` and `sync_server_jwt_only_test` the account side in
+`both` and `jwt` mode, against the shared test vectors in `test/vectors/test-vectors.json` (a copy of KeePassXC's
+`docs/plans/accounts/test-vectors.json`).
