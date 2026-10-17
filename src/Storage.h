@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,11 +26,33 @@ namespace syncserver
         std::string lastSeenAt;
     };
 
-    // Who sent a request: the user owns the databases, the device holds the token
+    // What an account access token allows on a vault (SPEC.md §9); ordered so a higher role includes the lower
+    enum class VaultRole
+    {
+        Read = 1,
+        Write = 2,
+        Manage = 3,
+    };
+
+    /**
+     * Who sent a request. With a device token, the user owns the databases and the device holds the token.
+     * With an account access token (JWT), subject is "user:<uuid>" or "sa:<uuid>" and vaults lists every
+     * vault the token opens with its role; user and deviceId are empty.
+     */
     struct Identity
     {
         std::string user;
         std::string deviceId;
+
+        std::string subject;
+        std::map<std::string, VaultRole> vaults;
+        // The token's exp, seconds since the Unix epoch; 0 for device tokens
+        int64_t expiresAt = 0;
+
+        bool isAccount() const
+        {
+            return !subject.empty();
+        }
     };
 
     struct PairingCode

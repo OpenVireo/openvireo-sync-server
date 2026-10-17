@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace syncserver
 {
@@ -20,6 +21,17 @@ namespace syncserver
         std::string secretKey;
         // https://endpoint/bucket/key instead of https://bucket.endpoint/key, for MinIO
         bool pathStyle = false;
+    };
+
+    // Which tokens the server accepts (SYNC_AUTH_MODE), see README.md
+    enum class AuthMode
+    {
+        // Device tokens only, the self-hosted setup: databases/*, devices/pairing*, events
+        Legacy,
+        // Account access tokens (JWT) only: vaults/*, events, internal/notify
+        Jwt,
+        // Either; a token with two "." is a JWT
+        Both,
     };
 
     struct Config
@@ -45,12 +57,36 @@ namespace syncserver
         unsigned databaseConnections = 0;
         S3Config s3;
 
+        AuthMode authMode = AuthMode::Legacy;
+        // The auth server's JWKS, its issuer URL (the tokens' iss) and the audience this server requires
+        std::string authJwksUrl;
+        std::string authIssuer;
+        std::string authAudience = "kpx-sync";
+        // Shared secret of the auth server for POST /internal/notify; the route is off when empty
+        std::string internalToken;
+        // Web origins allowed to call the API from a browser (CORS), e.g. https://app.example.org; "*" for any
+        std::vector<std::string> allowedOrigins;
+
         bool usesPostgres() const
         {
             return !databaseUrl.empty();
         }
 
+        bool acceptsJwt() const
+        {
+            return authMode != AuthMode::Legacy;
+        }
+
+        bool acceptsDeviceTokens() const
+        {
+            return authMode != AuthMode::Jwt;
+        }
+
         // Reads SYNC_* environment variables, throwing on invalid values
         static Config fromEnvironment();
+        // A comma-separated SYNC_ALLOWED_ORIGINS
+        static std::vector<std::string> parseOrigins(const std::string& list);
+        // Throws when SYNC_AUTH_MODE needs settings that are missing
+        void validateAuth() const;
     };
 } // namespace syncserver
