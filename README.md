@@ -2,6 +2,8 @@
 
 A small REST server that stores KeePassXC databases so several devices can stay in sync.
 
+The client side lives in [KeePassXC](https://github.com/bongani-m/keepassxc) (`src/gui/remote/`).
+
 The server only ever sees the **encrypted** `.kdbx` file. KeePassXC downloads it, decrypts and merges it locally, then uploads the merged result. Your master password and keys never leave the client.
 
 ## Quick start
@@ -10,7 +12,6 @@ The server is written in C++17 on [Drogon](https://github.com/drogonframework/dr
 
 ```sh
 brew install drogon sqlite     # or: apt install libdrogon-dev libsqlite3-dev, vcpkg install drogon sqlite3, …
-cd sync_server
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ./build/keepassxc-sync-server users add alice laptop   # prints laptop's access token, shown only once
@@ -120,7 +121,6 @@ most distributions' packages are not; CMake turns it on when it finds such a Dro
 ### Docker
 
 ```sh
-cd sync_server
 docker compose up -d --build                                  # data directory in a volume, on 127.0.0.1:8787
 docker compose run --rm sync-server users add alice laptop
 ```
@@ -144,7 +144,7 @@ by that uid.
 bucket. Create the bucket and a Spaces access key first, fill in the placeholders, then:
 
 ```sh
-doctl apps create --spec sync_server/.do/app.yaml
+doctl apps create --spec .do/app.yaml
 ```
 
 App Platform terminates HTTPS. Add users from the app's console (`keepassxc-sync-server users add alice
