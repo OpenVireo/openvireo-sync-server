@@ -1,5 +1,6 @@
 #include "SyncApi.h"
 
+#include "Jwt.h"
 #include "Util.h"
 
 #include <drogon/drogon.h>
@@ -9,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <vector>
 
@@ -40,10 +42,36 @@ namespace syncserver
             return resp;
         }
 
-        HttpResponsePtr errorResponse(HttpStatusCode status, const std::string& message)
+        // Machine-readable error codes of openapi.yaml, sent on the account routes only
+        std::string errorCodeFor(HttpStatusCode status)
+        {
+            switch (status) {
+            case k401Unauthorized:
+                return "unauthorized";
+            case k403Forbidden:
+                return "forbidden";
+            case k404NotFound:
+                return "not_found";
+            case k409Conflict:
+                return "conflict";
+            case k412PreconditionFailed:
+                return "precondition_failed";
+            case k428PreconditionRequired:
+                return "precondition_required";
+            case k429TooManyRequests:
+                return "rate_limited";
+            default:
+                return status >= 500 ? "internal_error" : "invalid_request";
+            }
+        }
+
+        HttpResponsePtr errorResponse(HttpStatusCode status, const std::string& message, bool withCode = false)
         {
             Json::Value body;
             body["error"] = message;
+            if (withCode) {
+                body["code"] = errorCodeFor(status);
+            }
             auto resp = jsonResponse(status, body);
             if (status == k401Unauthorized) {
                 resp->addHeader("WWW-Authenticate", "Bearer realm=\"keepassxc-sync\"");
@@ -52,17 +80,18 @@ namespace syncserver
             return resp;
         }
 
-        // Runs a handler body, turning HttpError and unexpected exceptions into JSON error responses
-        template <typename Fn> void respond(const Callback& callback, Fn&& fn)
+        // Runs a handler body, turning HttpError and unexpected exceptions into JSON error responses;
+        // withCode adds the "code" of the account routes
+        template <typename Fn> void respond(const Callback& callback, Fn&& fn, bool withCode = false)
         {
             HttpResponsePtr resp;
             try {
                 resp = fn();
             } catch (const HttpError& e) {
-                resp = errorResponse(e.status, e.what());
+                resp = errorResponse(e.status, e.what(), withCode);
             } catch (const std::exception& e) {
                 LOG_ERROR << e.what();
-                resp = errorResponse(k500InternalServerError, "Internal server error.");
+                resp = errorResponse(k500InternalServerError, "Internal server error.", withCode);
             }
             callback(resp);
         }
@@ -152,6 +181,11 @@ namespace syncserver
          *   event: database
          *   data: {"id": "...", "etag": "...", "revision": N}          (or "deleted": true)
          * so devices can sync right away instead of waiting for their next poll.
+         *
+         * Streams opened with an account access token (SPEC.md §11) instead get
+         *   event: vault     for changes to the vaults in the token's vlt claim, with the same data
+         *   event: access    {"vault": uuid|null, "change": ...} from the auth server (POST /internal/notify)
+         * and are closed once the token's exp has passed, so the client reconnects with a fresh token.
          */
         class EventHub
         {
@@ -166,23 +200,89 @@ namespace syncserver
                 }
             }
 
+            void subscribeAccount(const Identity& identity, ResponseStreamPtr stream)
+            {
+                AccountStream account;
+                account.subject = identity.subject;
+                for (const auto& [vault, role] : identity.vaults) {
+                    account.vaults.insert(vault);
+                }
+                account.expiresAt = identity.expiresAt;
+                account.stream = std::shared_ptr<ResponseStream>(std::move(stream));
+                std::lock_guard lock(m_mutex);
+                if (account.stream->send("retry: 5000\n: connected\n\n")) {
+                    m_accountStreams.push_back(std::move(account));
+                }
+            }
+
             void publish(const std::string& user, const Json::Value& data)
             {
-                Json::StreamWriterBuilder builder;
-                builder["indentation"] = "";
-                sendTo(user, "event: database\ndata: " + Json::writeString(builder, data) + "\n\n");
+                sendTo(user, "event: database\ndata: " + compact(data) + "\n\n");
+            }
+
+            // A change to a vault, for the account streams whose token lists it
+            void publishVault(const std::string& vault, const Json::Value& data)
+            {
+                const auto message = "event: vault\ndata: " + compact(data) + "\n\n";
+                std::lock_guard lock(m_mutex);
+                dropFailedAccounts([&](const AccountStream& account) -> const std::string* {
+                    return account.vaults.count(vault) ? &message : nullptr;
+                });
+            }
+
+            // An access change from the auth server, for every account stream of these subjects
+            void publishAccess(const std::set<std::string>& subjects, const Json::Value& data)
+            {
+                const auto message = "event: access\ndata: " + compact(data) + "\n\n";
+                std::lock_guard lock(m_mutex);
+                dropFailedAccounts([&](const AccountStream& account) -> const std::string* {
+                    return subjects.count(account.subject) ? &message : nullptr;
+                });
+            }
+
+            // Ends the account streams whose token has expired by `now` (seconds since the epoch)
+            void expire(int64_t now)
+            {
+                std::lock_guard lock(m_mutex);
+                m_accountStreams.erase(std::remove_if(m_accountStreams.begin(),
+                                                      m_accountStreams.end(),
+                                                      [now](const AccountStream& account) {
+                                                          if (now < account.expiresAt) {
+                                                              return false;
+                                                          }
+                                                          account.stream->close();
+                                                          return true;
+                                                      }),
+                                       m_accountStreams.end());
             }
 
             // Comments keep idle connections (and proxies) open and find streams whose client went away
             void ping()
             {
+                const std::string message = ": ping\n\n";
                 std::lock_guard lock(m_mutex);
                 for (auto& [user, streams] : m_streams) {
-                    dropFailed(streams, ": ping\n\n");
+                    dropFailed(streams, message);
                 }
+                dropFailedAccounts([&](const AccountStream&) { return &message; });
             }
 
         private:
+            struct AccountStream
+            {
+                std::string subject;
+                std::set<std::string> vaults;
+                int64_t expiresAt = 0;
+                std::shared_ptr<ResponseStream> stream;
+            };
+
+            static std::string compact(const Json::Value& data)
+            {
+                Json::StreamWriterBuilder builder;
+                builder["indentation"] = "";
+                return Json::writeString(builder, data);
+            }
+
             void sendTo(const std::string& user, const std::string& message)
             {
                 std::lock_guard lock(m_mutex);
@@ -206,22 +306,59 @@ namespace syncserver
                               streams.end());
             }
 
+            // Sends each account stream the message `pick` returns for it (none for nullptr), dropping failed ones
+            template <typename Pick> void dropFailedAccounts(Pick&& pick)
+            {
+                m_accountStreams.erase(std::remove_if(m_accountStreams.begin(),
+                                                      m_accountStreams.end(),
+                                                      [&pick](const AccountStream& account) {
+                                                          const std::string* message = pick(account);
+                                                          if (!message || account.stream->send(*message)) {
+                                                              return false;
+                                                          }
+                                                          account.stream->close();
+                                                          return true;
+                                                      }),
+                                       m_accountStreams.end());
+            }
+
             std::mutex m_mutex;
             std::map<std::string, std::vector<std::shared_ptr<ResponseStream>>> m_streams;
+            std::vector<AccountStream> m_accountStreams;
         };
 
         class SyncApi
         {
         public:
-            explicit SyncApi(Storage storage)
+            SyncApi(Storage storage, const Config& config, const SyncApiOptions& options)
                 : m_storage(std::move(storage))
                 , m_users(*m_storage.users)
                 , m_store(*m_storage.databases)
+                , m_vaults(*m_storage.vaults)
                 , m_events(std::make_shared<EventHub>())
+                , m_acceptsDeviceTokens(config.acceptsDeviceTokens())
+                , m_internalToken(config.internalToken)
+                , m_clock(options.clock ? options.clock : JwtVerifier::systemClock())
             {
                 m_store.setChangeListener([events = m_events](const std::string& user, const Json::Value& event) {
                     events->publish(user, event);
                 });
+                // Nothing of the account side runs unless SYNC_AUTH_MODE asks for it
+                if (config.acceptsJwt()) {
+                    auto fetcher =
+                        options.jwksFetcher ? options.jwksFetcher : JwtVerifier::httpFetcher(config.authJwksUrl);
+                    m_jwt = std::make_unique<JwtVerifier>(config.authIssuer, config.authAudience, fetcher, m_clock);
+                    m_vaults.setBroadcastListener([events = m_events](const Json::Value& message) {
+                        std::set<std::string> subjects;
+                        for (const auto& subject : message["subjects"]) {
+                            subjects.insert(subject.asString());
+                        }
+                        events->publishAccess(subjects, message["data"]);
+                    });
+                    m_vaults.setChangeListener([events = m_events](const std::string&, const Json::Value& event) {
+                        events->publishVault(event["id"].asString(), event);
+                    });
+                }
             }
 
             std::shared_ptr<EventHub> events() const
@@ -229,25 +366,63 @@ namespace syncserver
                 return m_events;
             }
 
+            int64_t now() const
+            {
+                return m_clock();
+            }
+
+            // The user of a device token, for the legacy routes
             std::string authenticate(const HttpRequestPtr& req)
             {
-                return identify(req).user;
+                auto identity = identify(req);
+                if (identity.isAccount()) {
+                    throw HttpError(k403Forbidden, "This route needs a device token; account tokens use /vaults.");
+                }
+                return identity.user;
+            }
+
+            // The subject and vaults of an account access token, for the vault routes
+            Identity authenticateAccount(const HttpRequestPtr& req)
+            {
+                auto identity = identify(req);
+                if (!identity.isAccount()) {
+                    throw HttpError(k403Forbidden, "This route needs an account access token.");
+                }
+                return identity;
+            }
+
+            static std::optional<std::string> bearerToken(const HttpRequestPtr& req)
+            {
+                // Authorization: Bearer <token>
+                const auto& header = req->getHeader("Authorization");
+                auto space = header.find_first_of(" \t");
+                if (space == std::string::npos) {
+                    return std::nullopt;
+                }
+                auto scheme = header.substr(0, space);
+                std::transform(
+                    scheme.begin(), scheme.end(), scheme.begin(), [](unsigned char c) { return std::tolower(c); });
+                auto token = trim(std::string_view(header).substr(space));
+                if (scheme != "bearer" || token.empty() || token.find_first_of(" \t") != std::string::npos) {
+                    return std::nullopt;
+                }
+                return token;
             }
 
             Identity identify(const HttpRequestPtr& req)
             {
-                // Authorization: Bearer <token>
-                const auto& header = req->getHeader("Authorization");
                 std::optional<Identity> identity;
-                auto space = header.find_first_of(" \t");
-                if (space != std::string::npos) {
-                    auto scheme = header.substr(0, space);
-                    std::transform(scheme.begin(), scheme.end(), scheme.begin(), [](unsigned char c) {
-                        return std::tolower(c);
-                    });
-                    auto token = trim(std::string_view(header).substr(space));
-                    if (scheme == "bearer" && token.find_first_of(" \t") == std::string::npos) {
-                        identity = m_users.authenticate(token);
+                if (auto token = bearerToken(req)) {
+                    // A JWT has exactly two "."; device tokens are base64url and have none
+                    if (m_jwt && std::count(token->begin(), token->end(), '.') == 2) {
+                        if (auto claims = m_jwt->verify(*token)) {
+                            identity.emplace();
+                            identity->subject = std::move(claims->subject);
+                            identity->vaults = std::move(claims->vaults);
+                            identity->expiresAt = claims->expiresAt;
+                        }
+                    } else if (m_acceptsDeviceTokens) {
+                        identity = m_users.authenticate(*token);
                     }
                 }
                 if (!identity) {
@@ -320,11 +495,15 @@ namespace syncserver
                 return jsonResponse(k200OK, body);
             }
 
-            HttpResponsePtr download(const HttpRequestPtr& req, const std::string& user, const std::string& id)
+            HttpResponsePtr download(const HttpRequestPtr& req,
+                                     DatabaseRepository& store,
+                                     const std::string& user,
+                                     const std::string& id,
+                                     const std::string& noun = "Database")
             {
-                auto meta = m_store.meta(user, id);
+                auto meta = store.meta(user, id);
                 if (!meta) {
-                    throw HttpError(k404NotFound, "Database not found.");
+                    throw HttpError(k404NotFound, noun + " not found.");
                 }
 
                 auto ifNoneMatch = parseEtagList(req->getHeader("If-None-Match"));
@@ -335,9 +514,9 @@ namespace syncserver
                 }
 
                 // drogon routes HEAD to this handler and drops the body while keeping its Content-Length
-                auto entry = m_store.read(user, id);
+                auto entry = store.read(user, id);
                 if (!entry) {
-                    throw HttpError(k404NotFound, "Database not found.");
+                    throw HttpError(k404NotFound, noun + " not found.");
                 }
                 auto resp = HttpResponse::newHttpResponse(k200OK, CT_APPLICATION_OCTET_STREAM);
                 resp->setBody(std::move(entry->data));
@@ -345,7 +524,8 @@ namespace syncserver
                 return resp;
             }
 
-            HttpResponsePtr upload(const HttpRequestPtr& req, const std::string& user, const std::string& id)
+            HttpResponsePtr
+            upload(const HttpRequestPtr& req, DatabaseRepository& store, const std::string& user, const std::string& id)
             {
                 // Bodies over SYNC_MAX_DB_BYTES never get here, drogon answers them with a bare 413
                 auto data = req->body();
@@ -357,22 +537,26 @@ namespace syncserver
                 }
 
                 auto result =
-                    m_store.write(user, id, data, [&](const auto& current) { checkWritePreconditions(req, current); });
+                    store.write(user, id, data, [&](const auto& current) { checkWritePreconditions(req, current); });
                 auto resp = jsonResponse(result.created ? k201Created : k200OK, result.meta.toJson());
                 setMetaHeaders(resp, result.meta);
                 return resp;
             }
 
-            HttpResponsePtr remove(const HttpRequestPtr& req, const std::string& user, const std::string& id)
+            HttpResponsePtr remove(const HttpRequestPtr& req,
+                                   DatabaseRepository& store,
+                                   const std::string& user,
+                                   const std::string& id,
+                                   const std::string& noun = "Database")
             {
-                auto removed = m_store.remove(user, id, [&](const auto& current) {
+                auto removed = store.remove(user, id, [&](const auto& current) {
                     auto ifMatch = parseEtagList(req->getHeader("If-Match"));
                     if (current && ifMatch && !etagMatches(*ifMatch, current)) {
                         throw HttpError(k412PreconditionFailed, "The database was changed on the server.");
                     }
                 });
                 if (!removed) {
-                    throw HttpError(k404NotFound, "Database not found.");
+                    throw HttpError(k404NotFound, noun + " not found.");
                 }
                 return HttpResponse::newHttpResponse(k204NoContent, CT_NONE);
             }
@@ -382,16 +566,25 @@ namespace syncserver
             {
                 auto slash = path.find('/');
                 auto id = path.substr(0, slash);
-                auto rest = path.substr(slash + 1);
                 validateId(id);
+                return history(req, m_store, user, id, path.substr(slash + 1));
+            }
+
+            HttpResponsePtr history(const HttpRequestPtr& req,
+                                    DatabaseRepository& store,
+                                    const std::string& user,
+                                    const std::string& id,
+                                    const std::string& rest,
+                                    const std::string& noun = "Database")
+            {
                 if (req->method() != Get) {
                     throw HttpError(k405MethodNotAllowed, "Method not allowed.");
                 }
 
                 if (rest == "history") {
-                    auto versions = m_store.history(user, id);
+                    auto versions = store.history(user, id);
                     if (!versions) {
-                        throw HttpError(k404NotFound, "Database not found.");
+                        throw HttpError(k404NotFound, noun + " not found.");
                     }
                     Json::Value body;
                     body["versions"] = Json::arrayValue;
@@ -409,7 +602,7 @@ namespace syncserver
                        })) {
                     throw HttpError(k404NotFound, "Not found.");
                 }
-                auto entry = m_store.readRevision(user, id, std::stoll(revisionText));
+                auto entry = store.readRevision(user, id, std::stoll(revisionText));
                 if (!entry) {
                     throw HttpError(k404NotFound, "Version not found.");
                 }
@@ -428,14 +621,130 @@ namespace syncserver
                 validateId(id);
                 switch (req->method()) {
                 case Get:
-                    return download(req, user, id);
+                    return download(req, m_store, user, id);
                 case Put:
-                    return upload(req, user, id);
+                    return upload(req, m_store, user, id);
                 case Delete:
-                    return remove(req, user, id);
+                    return remove(req, m_store, user, id);
                 default:
                     throw HttpError(k405MethodNotAllowed, "Method not allowed.");
                 }
+            }
+
+            // GET /api/v1/vaults: the vaults of the token that exist, with any role
+            HttpResponsePtr listVaults(const HttpRequestPtr& req)
+            {
+                auto identity = authenticateAccount(req);
+                Json::Value body;
+                body["vaults"] = Json::arrayValue;
+                for (const auto& [id, role] : identity.vaults) {
+                    if (auto meta = m_vaults.meta(VaultScope, id)) {
+                        body["vaults"].append(meta->toJson());
+                    }
+                }
+                return jsonResponse(k200OK, body);
+            }
+
+            static void requireRole(const Identity& identity, const std::string& vault, VaultRole needed)
+            {
+                auto it = identity.vaults.find(vault);
+                if (it == identity.vaults.end()) {
+                    throw HttpError(k403Forbidden, "The access token doesn't grant this vault.");
+                }
+                if (it->second < needed) {
+                    throw HttpError(k403Forbidden,
+                                    needed == VaultRole::Manage
+                                        ? "Creating or deleting this vault needs the manage role."
+                                        : "Changing this vault needs the write role.");
+                }
+            }
+
+            /**
+             * /api/v1/vaults/{uuid}[/history[/{revision}]] (sync-openapi.yaml). Roles from the token's vlt claim:
+             * GET and HEAD need read; PUT with If-Match needs write; PUT with If-None-Match (create) and DELETE
+             * need manage. Unlike a legacy database, a PUT without either precondition is always refused (428).
+             */
+            HttpResponsePtr vault(const HttpRequestPtr& req, const std::string& path)
+            {
+                auto identity = authenticateAccount(req);
+                auto slash = path.find('/');
+                auto id = path.substr(0, slash);
+                if (!isUuid(id)) {
+                    throw HttpError(k400BadRequest, "Invalid vault id (expected a lowercase UUID).");
+                }
+                if (slash != std::string::npos) {
+                    requireRole(identity, id, VaultRole::Read);
+                    return history(req, m_vaults, VaultScope, id, path.substr(slash + 1), "Vault");
+                }
+                switch (req->method()) {
+                case Get:
+                case Head:
+                    requireRole(identity, id, VaultRole::Read);
+                    return download(req, m_vaults, VaultScope, id, "Vault");
+                case Put: {
+                    const bool creating = !req->getHeader("If-None-Match").empty();
+                    requireRole(identity, id, creating ? VaultRole::Manage : VaultRole::Write);
+                    if (!creating && req->getHeader("If-Match").empty()) {
+                        throw HttpError(k428PreconditionRequired,
+                                        "Uploading a vault requires If-Match (update) or If-None-Match: * (create).");
+                    }
+                    return upload(req, m_vaults, VaultScope, id);
+                }
+                case Delete:
+                    requireRole(identity, id, VaultRole::Manage);
+                    return remove(req, m_vaults, VaultScope, id, "Vault");
+                default:
+                    throw HttpError(k405MethodNotAllowed, "Method not allowed.");
+                }
+            }
+
+            /**
+             * POST /api/v1/internal/notify from the auth server (SPEC.md §11), authenticated with
+             * SYNC_INTERNAL_TOKEN: {"subjects": [...], "event": "access", "data": {"vault", "change"}}.
+             * The event goes to every open account stream of those subjects, on every instance.
+             */
+            HttpResponsePtr notify(const HttpRequestPtr& req)
+            {
+                auto token = bearerToken(req);
+                if (!token || !constantTimeEquals(sha256Hex(*token), sha256Hex(m_internalToken))) {
+                    throw HttpError(k401Unauthorized, "Missing or invalid internal token.");
+                }
+                auto json = req->getJsonObject();
+                if (!json || !json->isObject() || !(*json)["subjects"].isArray() || (*json)["event"] != "access"
+                    || !(*json)["data"].isObject()) {
+                    throw HttpError(k400BadRequest,
+                                    "Expected {\"subjects\": [...], \"event\": \"access\", \"data\": {...}}.");
+                }
+                const auto& data = (*json)["data"];
+                static const std::set<std::string> changes{"granted", "revoked", "rotating", "rotated", "org"};
+                if (!data["change"].isString() || !changes.count(data["change"].asString())
+                    || !(data["vault"].isNull() || (data["vault"].isString() && isUuid(data["vault"].asString())))) {
+                    throw HttpError(k400BadRequest,
+                                    "data needs \"change\" (granted, revoked, rotating, rotated or org) and "
+                                    "\"vault\" (a vault id or null).");
+                }
+                std::vector<std::string> subjects;
+                for (const auto& subject : (*json)["subjects"]) {
+                    if (!subject.isString()) {
+                        throw HttpError(k400BadRequest, "subjects must be principals such as \"user:<uuid>\".");
+                    }
+                    subjects.push_back(subject.asString());
+                }
+                Json::Value event;
+                event["vault"] = data["vault"];
+                event["change"] = data["change"];
+                // In batches, so every message fits a Postgres notification
+                constexpr std::size_t batchSize = 50;
+                for (std::size_t start = 0; start < subjects.size(); start += batchSize) {
+                    Json::Value message;
+                    message["subjects"] = Json::arrayValue;
+                    for (std::size_t i = start; i < std::min(subjects.size(), start + batchSize); ++i) {
+                        message["subjects"].append(subjects[i]);
+                    }
+                    message["data"] = event;
+                    m_vaults.broadcast(message);
+                }
+                return HttpResponse::newHttpResponse(k204NoContent, CT_NONE);
             }
 
         private:
@@ -445,7 +754,13 @@ namespace syncserver
             Storage m_storage;
             UserRepository& m_users;
             DatabaseRepository& m_store;
+            DatabaseRepository& m_vaults;
             std::shared_ptr<EventHub> m_events;
+            bool m_acceptsDeviceTokens;
+            std::string m_internalToken;
+            std::function<int64_t()> m_clock;
+            // Only when SYNC_AUTH_MODE is jwt or both
+            std::unique_ptr<JwtVerifier> m_jwt;
         };
 
         std::string errorMessageFor(HttpStatusCode status)
@@ -461,11 +776,62 @@ namespace syncserver
                 return status >= 500 ? "Internal server error." : "Request failed.";
             }
         }
+
+        bool originAllowed(const std::vector<std::string>& allowed, const std::string& origin)
+        {
+            return !origin.empty()
+                   && std::any_of(allowed.begin(), allowed.end(), [&origin](const std::string& candidate) {
+                          return candidate == "*" || candidate == origin;
+                      });
+        }
+
+        /**
+         * CORS for web apps on SYNC_ALLOWED_ORIGINS (e.g. the hosted web app reaching a self-hosted server).
+         * Tokens travel in the Authorization header, never in cookies, so no credentials mode. Nothing changes
+         * when the list is empty.
+         */
+        void registerCors(const std::vector<std::string>& allowed)
+        {
+            if (allowed.empty()) {
+                return;
+            }
+            auto& app = drogon::app();
+            // Preflight requests are answered before routing, for every route
+            app.registerPreRoutingAdvice(
+                [allowed](const HttpRequestPtr& req, AdviceCallback&& callback, AdviceChainCallback&& chain) {
+                    const auto& origin = req->getHeader("Origin");
+                    if (req->method() != Options || req->getHeader("Access-Control-Request-Method").empty()
+                        || !originAllowed(allowed, origin)) {
+                        chain();
+                        return;
+                    }
+                    auto resp = HttpResponse::newHttpResponse(k204NoContent, CT_NONE);
+                    resp->addHeader("Access-Control-Allow-Origin", origin);
+                    resp->addHeader("Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, DELETE");
+                    resp->addHeader("Access-Control-Allow-Headers",
+                                    "Authorization, Content-Type, If-Match, If-None-Match");
+                    resp->addHeader("Access-Control-Max-Age", "600");
+                    // Chrome's Private Network Access: a public web app reaching a server on localhost or the LAN
+                    if (req->getHeader("Access-Control-Request-Private-Network") == "true") {
+                        resp->addHeader("Access-Control-Allow-Private-Network", "true");
+                    }
+                    resp->addHeader("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
+                    callback(resp);
+                });
+            app.registerPostHandlingAdvice([allowed](const HttpRequestPtr& req, const HttpResponsePtr& resp) {
+                const auto& origin = req->getHeader("Origin");
+                resp->addHeader("Vary", "Origin");
+                if (originAllowed(allowed, origin)) {
+                    resp->addHeader("Access-Control-Allow-Origin", origin);
+                    resp->addHeader("Access-Control-Expose-Headers", "ETag, X-Database-Revision, Last-Modified");
+                }
+            });
+        }
     } // namespace
 
-    void registerSyncApi(const Config& config, Storage storage)
+    void registerSyncApi(const Config& config, Storage storage, SyncApiOptions options)
     {
-        auto api = std::make_shared<SyncApi>(std::move(storage));
+        auto api = std::make_shared<SyncApi>(std::move(storage), config, options);
         auto& app = drogon::app();
 
         app.enableServerHeader(false)
@@ -483,6 +849,8 @@ namespace syncserver
                 callback(errorResponse(k500InternalServerError, "Internal server error."));
             });
 
+        registerCors(config.allowedOrigins);
+
         app.registerHandler(
             "/api/v1/health",
             [](const HttpRequestPtr&, Callback&& callback) {
@@ -492,54 +860,85 @@ namespace syncserver
             },
             {Get});
 
-        app.registerHandler(
-            "/api/v1/databases",
-            [api](const HttpRequestPtr& req, Callback&& callback) {
-                respond(callback, [&] { return api->list(req); });
-            },
-            {Get});
+        // Device tokens: the self-hosted setup (SYNC_AUTH_MODE legacy or both)
+        if (config.acceptsDeviceTokens()) {
+            app.registerHandler("/api/v1/databases",
+                                [api](const HttpRequestPtr& req, Callback&& callback) {
+                                    respond(callback, [&] { return api->list(req); });
+                                },
+                                {Get});
 
-        app.registerHandler(
-            "/api/v1/devices/pairing",
-            [api](const HttpRequestPtr& req, Callback&& callback) {
-                respond(callback, [&] { return api->createPairing(req); });
-            },
-            {Post});
+            app.registerHandler("/api/v1/devices/pairing",
+                                [api](const HttpRequestPtr& req, Callback&& callback) {
+                                    respond(callback, [&] { return api->createPairing(req); });
+                                },
+                                {Post});
 
-        app.registerHandler(
-            "/api/v1/devices/pairing/claim",
-            [api](const HttpRequestPtr& req, Callback&& callback) {
-                respond(callback, [&] { return api->claimPairing(req); });
-            },
-            {Post});
+            app.registerHandler("/api/v1/devices/pairing/claim",
+                                [api](const HttpRequestPtr& req, Callback&& callback) {
+                                    respond(callback, [&] { return api->claimPairing(req); });
+                                },
+                                {Post});
 
-        app.registerHandler(
-            "/api/v1/events",
-            [api](const HttpRequestPtr& req, Callback&& callback) {
-                std::string user;
-                try {
-                    user = api->authenticate(req);
-                } catch (const HttpError& e) {
-                    callback(errorResponse(e.status, e.what()));
-                    return;
-                }
-                auto events = api->events();
-                auto resp = HttpResponse::newAsyncStreamResponse(
-                    [events, user](ResponseStreamPtr stream) { events->subscribe(user, std::move(stream)); }, true);
-                resp->setContentTypeString("text/event-stream");
-                // Reverse proxies such as nginx would otherwise hold events back
-                resp->addHeader("X-Accel-Buffering", "no");
-                callback(resp);
-            },
-            {Get});
+            // A regex route so ids that are not path-safe (e.g. "..%2Fusers.json") reach validateId() and get a 400
+            app.registerHandlerViaRegex("/api/v1/databases/(.+)",
+                                        [api](const HttpRequestPtr& req, Callback&& callback, const std::string& id) {
+                                            respond(callback, [&] { return api->database(req, id); });
+                                        },
+                                        {Get, Put, Delete});
+        }
+
+        // Account access tokens (SYNC_AUTH_MODE jwt or both); in legacy mode these routes don't exist (404)
+        if (config.acceptsJwt()) {
+            app.registerHandler("/api/v1/vaults",
+                                [api](const HttpRequestPtr& req, Callback&& callback) {
+                                    respond(callback, [&] { return api->listVaults(req); }, true);
+                                },
+                                {Get});
+
+            app.registerHandlerViaRegex("/api/v1/vaults/(.+)",
+                                        [api](const HttpRequestPtr& req, Callback&& callback, const std::string& path) {
+                                            respond(callback, [&] { return api->vault(req, path); }, true);
+                                        },
+                                        {Get, Put, Delete});
+
+            if (!config.internalToken.empty()) {
+                app.registerHandler("/api/v1/internal/notify",
+                                    [api](const HttpRequestPtr& req, Callback&& callback) {
+                                        respond(callback, [&] { return api->notify(req); }, true);
+                                    },
+                                    {Post});
+            }
+
+            // Account streams end when their token expires
+            app.getLoop()->runEvery(1.0, [api] { api->events()->expire(api->now()); });
+        }
+
+        app.registerHandler("/api/v1/events",
+                            [api, withCode = config.acceptsJwt()](const HttpRequestPtr& req, Callback&& callback) {
+                                Identity identity;
+                                try {
+                                    identity = api->identify(req);
+                                } catch (const HttpError& e) {
+                                    callback(errorResponse(e.status, e.what(), withCode));
+                                    return;
+                                }
+                                auto events = api->events();
+                                auto resp = HttpResponse::newAsyncStreamResponse(
+                                    [events, identity](ResponseStreamPtr stream) {
+                                        if (identity.isAccount()) {
+                                            events->subscribeAccount(identity, std::move(stream));
+                                        } else {
+                                            events->subscribe(identity.user, std::move(stream));
+                                        }
+                                    },
+                                    true);
+                                resp->setContentTypeString("text/event-stream");
+                                // Reverse proxies such as nginx would otherwise hold events back
+                                resp->addHeader("X-Accel-Buffering", "no");
+                                callback(resp);
+                            },
+                            {Get});
         app.getLoop()->runEvery(25.0, [events = api->events()] { events->ping(); });
-
-        // A regex route so ids that are not path-safe (e.g. "..%2Fusers.json") reach validateId() and get a 400
-        app.registerHandlerViaRegex(
-            "/api/v1/databases/(.+)",
-            [api](const HttpRequestPtr& req, Callback&& callback, const std::string& id) {
-                respond(callback, [&] { return api->database(req, id); });
-            },
-            {Get, Put, Delete});
     }
 } // namespace syncserver
