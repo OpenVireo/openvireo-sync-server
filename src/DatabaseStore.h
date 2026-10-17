@@ -22,11 +22,17 @@ namespace syncserver
      *   <dataDir>/databases/<user>/<id>.meta.json   { id, revision, etag, size, updatedAt }
      *   <dataDir>/databases/<user>/.history/<id>/<revision>.kdbx   previous versions
      *   <dataDir>/databases/<user>/.history/<id>/<revision>.json   their metadata
+     *
+     * Account vaults use a store of their own on <dataDir>/vaults with the empty user (VaultScope), so the
+     * same layout without the user folder: <dataDir>/vaults/<uuid>.kdbx and so on.
      */
     class DatabaseStore : public DatabaseRepository
     {
     public:
-        DatabaseStore(const std::filesystem::path& dataDir, unsigned historySize);
+        static constexpr const char* DatabasesFolder = "databases";
+        static constexpr const char* VaultsFolder = "vaults";
+
+        DatabaseStore(const std::filesystem::path& dataDir, unsigned historySize, const char* folder = DatabasesFolder);
 
         std::optional<DatabaseMeta> meta(const std::string& user, const std::string& id) override;
         std::optional<Entry> read(const std::string& user, const std::string& id) override;
@@ -42,6 +48,11 @@ namespace syncserver
 
         // Only this process writes the directory, so it hears about every change itself
         void setChangeListener(ChangeListener listener) override;
+        void broadcast(const Json::Value& message) override;
+        void setBroadcastListener(BroadcastListener listener) override;
+
+        bool
+        importDatabase(const std::string& user, const std::string& id, const std::vector<Entry>& versions) override;
 
         // Users with a databases folder, including removed users whose databases were kept
         std::vector<std::string> owners() const;
@@ -68,5 +79,6 @@ namespace syncserver
         std::mutex m_locksMutex;
         std::map<std::string, std::shared_ptr<std::mutex>> m_locks;
         ChangeListener m_listener;
+        BroadcastListener m_broadcastListener;
     };
 } // namespace syncserver

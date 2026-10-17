@@ -134,6 +134,7 @@ namespace syncserver
         if (!config.usesPostgres()) {
             return {std::make_shared<UserStore>(config.dataDir),
                     std::make_shared<DatabaseStore>(config.dataDir, config.historySize),
+                    std::make_shared<DatabaseStore>(config.dataDir, config.historySize, DatabaseStore::VaultsFolder),
                     nullptr,
                     "data directory " + config.dataDir.string()};
         }
@@ -145,6 +146,8 @@ namespace syncserver
             std::make_shared<std::pair<std::shared_ptr<Postgres>, std::shared_ptr<BlobStore>>>(postgres, blobs);
         return {std::make_shared<PgUserRepository>(postgres),
                 std::make_shared<PgDatabaseRepository>(postgres, blobs, config.historySize),
+                std::make_shared<PgDatabaseRepository>(
+                    postgres, blobs, config.historySize, PgDatabaseRepository::Namespace::Vaults),
                 backend,
                 "Postgres " + postgres->describe() + ", bucket " + blobs->describe()};
 #else

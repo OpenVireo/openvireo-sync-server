@@ -47,8 +47,15 @@ namespace syncserver
 
     PgDatabaseRepository::PgDatabaseRepository(std::shared_ptr<Postgres> postgres,
                                                std::shared_ptr<BlobStore> blobs,
-                                               unsigned historySize)
-        : m_pg(std::move(postgres))
+                                               unsigned historySize,
+                                               Namespace ns)
+        : m_ns(ns)
+        , m_table(ns == Namespace::Vaults ? "vaults" : "databases")
+        , m_versions(ns == Namespace::Vaults ? "vault_versions" : "versions")
+        , m_owner(ns == Namespace::Vaults ? "scope" : "user_name")
+        // User names start with a letter or digit, so "_vaults/" is never a user's folder
+        , m_keyPrefix(ns == Namespace::Vaults ? "_vaults/" : "")
+        , m_pg(std::move(postgres))
         , m_blobs(std::move(blobs))
         , m_historySize(historySize)
     {
@@ -68,7 +75,8 @@ namespace syncserver
         // A random part makes every upload's key its own, so pruning one version can never delete
         // the blob of another with the same contents
         auto hash = etag.substr(1, etag.size() - 2);
-        return user + "/" + id + "/" + hash + "-" + drogon::utils::secureRandomString(16) + ".kdbx";
+        return m_keyPrefix + (user.empty() ? "" : user + "/") + id + "/" + hash + "-"
+               + drogon::utils::secureRandomString(16) + ".kdbx";
     }
 
     void PgDatabaseRepository::notify(Transaction& trans, const std::string& user, const Json::Value& event)
@@ -76,8 +84,34 @@ namespace syncserver
         Json::Value payload;
         payload["user"] = user;
         payload["event"] = event;
+        if (auto ns = notifyNamespace(); !ns.empty()) {
+            payload["ns"] = ns;
+        }
         // Postgres only delivers it if the transaction commits
         trans.execSqlSync("SELECT pg_notify($1, $2)", m_pg->channel(), compactJson(payload));
+    }
+
+    std::string PgDatabaseRepository::notifyNamespace() const
+    {
+        return m_ns == Namespace::Vaults ? "vaults" : "";
+    }
+
+    void PgDatabaseRepository::broadcast(const Json::Value& message)
+    {
+        Json::Value payload;
+        payload["ns"] = notifyNamespace().empty() ? "databases" : notifyNamespace();
+        payload["broadcast"] = message;
+        auto text = compactJson(payload);
+        // NOTIFY payloads must stay under 8000 bytes
+        if (text.size() >= 7900) {
+            throw std::invalid_argument("The message is too large to broadcast");
+        }
+        m_pg->client().execSqlSync("SELECT pg_notify($1, $2)", m_pg->channel(), text);
+    }
+
+    void PgDatabaseRepository::setBroadcastListener(BroadcastListener listener)
+    {
+        m_broadcastListener = std::move(listener);
     }
 
     void PgDatabaseRepository::removeBlobs(const std::vector<std::string>& keys)
@@ -95,7 +129,7 @@ namespace syncserver
     std::optional<DatabaseMeta> PgDatabaseRepository::meta(const std::string& user, const std::string& id)
     {
         auto rows = m_pg->client().execSqlSync(
-            "SELECT " + COLUMNS + " FROM databases WHERE user_name = $1 AND id = $2", user, id);
+            "SELECT " + COLUMNS + " FROM " + m_table + " WHERE " + m_owner + " = $1 AND id = $2", user, id);
         if (rows.empty()) {
             return std::nullopt;
         }
@@ -107,7 +141,7 @@ namespace syncserver
         // A newer upload may prune the blob between reading the row and the blob; then read the row again
         for (int attempt = 0; attempt < 2; ++attempt) {
             auto rows = m_pg->client().execSqlSync(
-                "SELECT " + COLUMNS + " FROM databases WHERE user_name = $1 AND id = $2", user, id);
+                "SELECT " + COLUMNS + " FROM " + m_table + " WHERE " + m_owner + " = $1 AND id = $2", user, id);
             if (rows.empty()) {
                 return std::nullopt;
             }
@@ -123,7 +157,7 @@ namespace syncserver
     {
         std::vector<DatabaseMeta> metas;
         for (const auto& row : m_pg->client().execSqlSync(
-                 "SELECT " + COLUMNS + " FROM databases WHERE user_name = $1 ORDER BY id", user)) {
+                 "SELECT " + COLUMNS + " FROM " + m_table + " WHERE " + m_owner + " = $1 ORDER BY id", user)) {
             metas.push_back(fromRow(row).meta);
         }
         return metas;
@@ -148,8 +182,10 @@ namespace syncserver
                 // A second round when another writer created the database between our SELECT and INSERT
                 for (int attempt = 0;; ++attempt) {
                     // The row lock makes check-and-commit atomic across instances
-                    auto rows = trans.execSqlSync(
-                        "SELECT " + COLUMNS + " FROM databases WHERE user_name = $1 AND id = $2 FOR UPDATE", user, id);
+                    auto rows = trans.execSqlSync("SELECT " + COLUMNS + " FROM " + m_table + " WHERE " + m_owner
+                                                      + " = $1 AND id = $2 FOR UPDATE",
+                                                  user,
+                                                  id);
                     std::optional<Stored> current;
                     if (!rows.empty()) {
                         current = fromRow(rows[0]);
@@ -162,16 +198,22 @@ namespace syncserver
                     result.meta.updatedAt = updatedAt;
                     if (current) {
                         if (m_historySize > 0) {
-                            trans.execSqlSync("INSERT INTO versions "
-                                              "SELECT user_name, id, revision, etag, size, blob_key, updated_at "
-                                              "FROM databases WHERE user_name = $1 AND id = $2",
+                            trans.execSqlSync("INSERT INTO " + m_versions
+                                                  + " "
+                                                    "SELECT "
+                                                  + m_owner
+                                                  + ", id, revision, etag, size, blob_key, updated_at "
+                                                    "FROM "
+                                                  + m_table + " WHERE " + m_owner + " = $1 AND id = $2",
                                               user,
                                               id);
                         } else {
                             pruned.push_back(current->blobKey);
                         }
-                        trans.execSqlSync("UPDATE databases SET revision = $3, etag = $4, size = $5, blob_key = $6, "
-                                          "updated_at = $7::timestamptz WHERE user_name = $1 AND id = $2",
+                        trans.execSqlSync("UPDATE " + m_table
+                                              + " SET revision = $3, etag = $4, size = $5, blob_key = $6, "
+                                                "updated_at = $7::timestamptz WHERE "
+                                              + m_owner + " = $1 AND id = $2",
                                           user,
                                           id,
                                           current->meta.revision + 1,
@@ -183,15 +225,17 @@ namespace syncserver
                         result.created = false;
                         break;
                     }
-                    auto inserted = trans.execSqlSync(
-                        "INSERT INTO databases (user_name, id, revision, etag, size, blob_key, updated_at) "
-                        "VALUES ($1, $2, 1, $3, $4, $5, $6::timestamptz) ON CONFLICT (user_name, id) DO NOTHING",
-                        user,
-                        id,
-                        etag,
-                        static_cast<int64_t>(data.size()),
-                        key,
-                        updatedAt);
+                    auto inserted =
+                        trans.execSqlSync("INSERT INTO " + m_table + " (" + m_owner
+                                              + ", id, revision, etag, size, blob_key, updated_at) "
+                                                "VALUES ($1, $2, 1, $3, $4, $5, $6::timestamptz) ON CONFLICT ("
+                                              + m_owner + ", id) DO NOTHING",
+                                          user,
+                                          id,
+                                          etag,
+                                          static_cast<int64_t>(data.size()),
+                                          key,
+                                          updatedAt);
                     if (inserted.affectedRows() == 1) {
                         result.meta.revision = 1;
                         result.created = true;
@@ -203,13 +247,15 @@ namespace syncserver
                 }
 
                 if (m_historySize > 0) {
-                    auto old =
-                        trans.execSqlSync("DELETE FROM versions WHERE user_name = $1 AND id = $2 AND revision NOT IN ("
-                                          "SELECT revision FROM versions WHERE user_name = $1 AND id = $2 "
-                                          "ORDER BY revision DESC LIMIT $3) RETURNING blob_key",
-                                          user,
-                                          id,
-                                          static_cast<int64_t>(m_historySize));
+                    auto old = trans.execSqlSync("DELETE FROM " + m_versions + " WHERE " + m_owner
+                                                     + " = $1 AND id = $2 AND revision NOT IN ("
+                                                       "SELECT revision FROM "
+                                                     + m_versions + " WHERE " + m_owner
+                                                     + " = $1 AND id = $2 "
+                                                       "ORDER BY revision DESC LIMIT $3) RETURNING blob_key",
+                                                 user,
+                                                 id,
+                                                 static_cast<int64_t>(m_historySize));
                     for (const auto& row : old) {
                         pruned.push_back(row["blob_key"].as<std::string>());
                     }
@@ -233,8 +279,10 @@ namespace syncserver
         bool removed = false;
         std::vector<std::string> keys;
         m_pg->transaction([&](Transaction& trans) {
-            auto rows = trans.execSqlSync(
-                "SELECT " + COLUMNS + " FROM databases WHERE user_name = $1 AND id = $2 FOR UPDATE", user, id);
+            auto rows = trans.execSqlSync("SELECT " + COLUMNS + " FROM " + m_table + " WHERE " + m_owner
+                                              + " = $1 AND id = $2 FOR UPDATE",
+                                          user,
+                                          id);
             std::optional<DatabaseMeta> current;
             if (!rows.empty()) {
                 current = fromRow(rows[0]).meta;
@@ -243,11 +291,9 @@ namespace syncserver
             if (!current) {
                 return;
             }
-            for (const auto* table : {"databases", "versions"}) {
-                auto deleted = trans.execSqlSync(std::string("DELETE FROM ") + table
-                                                     + " WHERE user_name = $1 AND id = $2 RETURNING blob_key",
-                                                 user,
-                                                 id);
+            for (const auto& table : {m_table, m_versions}) {
+                auto deleted = trans.execSqlSync(
+                    "DELETE FROM " + table + " WHERE " + m_owner + " = $1 AND id = $2 RETURNING blob_key", user, id);
                 for (const auto& row : deleted) {
                     keys.push_back(row["blob_key"].as<std::string>());
                 }
@@ -262,11 +308,11 @@ namespace syncserver
     std::optional<std::vector<DatabaseMeta>> PgDatabaseRepository::history(const std::string& user,
                                                                            const std::string& id)
     {
-        auto rows = m_pg->client().execSqlSync("SELECT " + COLUMNS
-                                                   + ", 0 AS kept FROM databases WHERE user_name = $1 AND id = $2 "
+        auto rows = m_pg->client().execSqlSync("SELECT " + COLUMNS + ", 0 AS kept FROM " + m_table + " WHERE " + m_owner
+                                                   + " = $1 AND id = $2 "
                                                      "UNION ALL SELECT "
-                                                   + COLUMNS
-                                                   + ", 1 AS kept FROM versions WHERE user_name = $1 AND id = $2 "
+                                                   + COLUMNS + ", 1 AS kept FROM " + m_versions + " WHERE " + m_owner
+                                                   + " = $1 AND id = $2 "
                                                      "ORDER BY revision DESC",
                                                user,
                                                id);
@@ -286,16 +332,16 @@ namespace syncserver
     PgDatabaseRepository::readRevision(const std::string& user, const std::string& id, int64_t revision)
     {
         for (int attempt = 0; attempt < 2; ++attempt) {
-            auto rows = m_pg->client().execSqlSync(
-                "SELECT " + COLUMNS
-                    + " FROM databases WHERE user_name = $1 AND id = $2 AND revision = $3 "
-                      "UNION ALL SELECT "
-                    + COLUMNS
-                    + " FROM versions WHERE user_name = $1 AND id = $2 AND revision = $3 "
-                      "AND EXISTS (SELECT 1 FROM databases WHERE user_name = $1 AND id = $2)",
-                user,
-                id,
-                revision);
+            auto rows = m_pg->client().execSqlSync("SELECT " + COLUMNS + " FROM " + m_table + " WHERE " + m_owner
+                                                       + " = $1 AND id = $2 AND revision = $3 "
+                                                         "UNION ALL SELECT "
+                                                       + COLUMNS + " FROM " + m_versions + " WHERE " + m_owner
+                                                       + " = $1 AND id = $2 AND revision = $3 "
+                                                         "AND EXISTS (SELECT 1 FROM "
+                                                       + m_table + " WHERE " + m_owner + " = $1 AND id = $2)",
+                                                   user,
+                                                   id,
+                                                   revision);
             if (rows.empty()) {
                 return std::nullopt;
             }
@@ -314,19 +360,37 @@ namespace syncserver
         if (!m_listener) {
             throw std::runtime_error("This Drogon build has no PostgreSQL listener");
         }
-        m_listener->listen(m_pg->channel(),
-                           [listener = std::move(listener)](const std::string&, const std::string& payload) {
-                               Json::Value message;
-                               Json::CharReaderBuilder builder;
-                               std::string errors;
-                               std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-                               if (!reader->parse(payload.data(), payload.data() + payload.size(), &message, &errors)
-                                   || !message["user"].isString() || !message["event"].isObject()) {
-                                   LOG_WARN << "Ignoring a malformed change notification";
-                                   return;
-                               }
-                               listener(message["user"].asString(), message["event"]);
-                           });
+        m_listener->listen(
+            m_pg->channel(),
+            [listener = std::move(listener), broadcastListener = m_broadcastListener, ns = notifyNamespace()](
+                const std::string&, const std::string& payload) {
+                Json::Value message;
+                Json::CharReaderBuilder builder;
+                std::string errors;
+                std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+                if (!reader->parse(payload.data(), payload.data() + payload.size(), &message, &errors)
+                    || !message.isObject()) {
+                    LOG_WARN << "Ignoring a malformed change notification";
+                    return;
+                }
+                // Every namespace shares the channel; changes to legacy databases carry no "ns"
+                const auto messageNs = message.get("ns", "").asString();
+                const bool mine = ns.empty() ? (messageNs.empty() || messageNs == "databases") : messageNs == ns;
+                if (!mine) {
+                    return;
+                }
+                if (message.isMember("broadcast")) {
+                    if (broadcastListener && message["broadcast"].isObject()) {
+                        broadcastListener(message["broadcast"]);
+                    }
+                    return;
+                }
+                if (!message["user"].isString() || !message["event"].isObject()) {
+                    LOG_WARN << "Ignoring a malformed change notification";
+                    return;
+                }
+                listener(message["user"].asString(), message["event"]);
+            });
     }
 
     std::optional<std::size_t> PgDatabaseRepository::sweep(std::chrono::seconds minAge)
@@ -338,7 +402,8 @@ namespace syncserver
             auto objects = m_blobs->list();
             std::set<std::string> referenced;
             for (const auto& row :
-                 trans.execSqlSync("SELECT blob_key FROM databases UNION SELECT blob_key FROM versions")) {
+                 trans.execSqlSync("SELECT blob_key FROM databases UNION SELECT blob_key FROM versions "
+                                   "UNION SELECT blob_key FROM vaults UNION SELECT blob_key FROM vault_versions")) {
                 referenced.insert(row["blob_key"].as<std::string>());
             }
             const auto cutoff = std::chrono::system_clock::now() - minAge;
@@ -393,8 +458,8 @@ namespace syncserver
                     const auto& meta = versions[i].meta;
                     std::string updatedAt = meta.updatedAt.empty() ? isoTimestamp() : meta.updatedAt;
                     auto added = trans.execSqlSync(
-                        std::string("INSERT INTO ") + (i == 0 ? "databases" : "versions")
-                            + " (user_name, id, revision, etag, size, blob_key, updated_at) "
+                        "INSERT INTO " + (i == 0 ? m_table : m_versions) + " (" + m_owner
+                            + ", id, revision, etag, size, blob_key, updated_at) "
                               "VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz) ON CONFLICT DO NOTHING",
                         user,
                         id,

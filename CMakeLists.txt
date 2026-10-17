@@ -40,6 +40,7 @@ add_library(sync_server_core STATIC
     src/Config.cpp
     src/DatabaseStore.cpp
     src/Jwt.cpp
+    src/Migrate.cpp
     src/Storage.cpp
     src/SyncApi.cpp
     src/UserStore.cpp

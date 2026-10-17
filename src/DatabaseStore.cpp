@@ -66,15 +66,16 @@ namespace syncserver
         }
     } // namespace
 
-    DatabaseStore::DatabaseStore(const fs::path& dataDir, unsigned historySize)
-        : m_root(dataDir / "databases")
+    DatabaseStore::DatabaseStore(const fs::path& dataDir, unsigned historySize, const char* folder)
+        : m_root(dataDir / folder)
         , m_historySize(historySize)
     {
     }
 
     DatabaseStore::Paths DatabaseStore::paths(const std::string& user, const std::string& id) const
     {
-        auto dir = m_root / user;
+        // The empty user (vaults) keeps its files right in the root folder
+        auto dir = user.empty() ? m_root : m_root / user;
         return {dir, dir / (id + ".kdbx"), dir / (id + std::string(META_SUFFIX)), dir / ".history" / id};
     }
 
@@ -124,7 +125,7 @@ namespace syncserver
     {
         std::vector<DatabaseMeta> metas;
         std::error_code ec;
-        for (const auto& item : fs::directory_iterator(m_root / user, ec)) {
+        for (const auto& item : fs::directory_iterator(user.empty() ? m_root : m_root / user, ec)) {
             auto name = item.path().filename().string();
             if (name.size() <= META_SUFFIX.size()
                 || name.compare(name.size() - META_SUFFIX.size(), META_SUFFIX.size(), META_SUFFIX) != 0) {
@@ -203,6 +204,54 @@ namespace syncserver
     void DatabaseStore::setChangeListener(ChangeListener listener)
     {
         m_listener = std::move(listener);
+    }
+
+    void DatabaseStore::broadcast(const Json::Value& message)
+    {
+        // One process: every listener is here
+        if (m_broadcastListener) {
+            m_broadcastListener(message);
+        }
+    }
+
+    void DatabaseStore::setBroadcastListener(BroadcastListener listener)
+    {
+        m_broadcastListener = std::move(listener);
+    }
+
+    bool
+    DatabaseStore::importDatabase(const std::string& user, const std::string& id, const std::vector<Entry>& versions)
+    {
+        if (versions.empty()) {
+            return false;
+        }
+        auto mutex = lockFor(user, id);
+        std::lock_guard lock(*mutex);
+        if (readMeta(user, id)) {
+            return false;
+        }
+        auto p = paths(user, id);
+        ensurePrivateDirectory(p.dir);
+        // Under its new id when it moves, e.g. from a user's databases to a vault
+        auto metaOf = [&id](const Entry& entry) {
+            auto meta = entry.meta;
+            meta.id = id;
+            meta.size = entry.data.size();
+            if (meta.updatedAt.empty()) {
+                meta.updatedAt = isoTimestamp();
+            }
+            return meta;
+        };
+        for (std::size_t i = 1; i < versions.size(); ++i) {
+            ensurePrivateDirectory(p.history);
+            const auto name = std::to_string(versions[i].meta.revision);
+            atomicWriteFile(p.history / (name + ".kdbx"), versions[i].data);
+            atomicWriteFile(p.history / (name + ".json"), toJsonString(metaOf(versions[i]).toJson()));
+        }
+        auto meta = metaOf(versions.front());
+        atomicWriteFile(p.blob, versions.front().data);
+        atomicWriteFile(p.meta, toJsonString(meta.toJson()));
+        return true;
     }
 
     std::vector<std::string> DatabaseStore::owners() const
