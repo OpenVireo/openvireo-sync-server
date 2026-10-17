@@ -69,6 +69,19 @@ if(BUILD_TESTING)
     add_executable(sync_server_test test/ApiTest.cpp)
     target_link_libraries(sync_server_test PRIVATE sync_server_core)
     add_test(NAME sync_server_test COMMAND sync_server_test)
+
+    # Account access tokens (SYNC_AUTH_MODE both and jwt) against the spec's shared test vectors
+    set(SYNC_TEST_VECTORS "${CMAKE_CURRENT_SOURCE_DIR}/test/vectors/test-vectors.json")
+    add_executable(sync_server_jwt_test test/JwtTest.cpp)
+    target_link_libraries(sync_server_jwt_test PRIVATE sync_server_core)
+    target_compile_definitions(sync_server_jwt_test PRIVATE SYNC_TEST_VECTORS="${SYNC_TEST_VECTORS}")
+    add_test(NAME sync_server_jwt_test COMMAND sync_server_jwt_test)
+
+    add_executable(sync_server_jwt_only_test test/JwtTest.cpp)
+    target_link_libraries(sync_server_jwt_only_test PRIVATE sync_server_core)
+    target_compile_definitions(sync_server_jwt_only_test PRIVATE SYNC_TEST_VECTORS="${SYNC_TEST_VECTORS}"
+                                                                  SYNC_TEST_JWT_ONLY)
+    add_test(NAME sync_server_jwt_only_test COMMAND sync_server_jwt_only_test)
 endif()
 
 install(TARGETS keepassxc-sync-server RUNTIME DESTINATION bin)

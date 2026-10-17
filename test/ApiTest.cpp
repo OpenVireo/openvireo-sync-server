@@ -180,6 +180,65 @@ DROGON_TEST(UnknownRoutesReturnJson404)
     CHECK(json(resp)["error"].asString() == "Not found.");
 }
 
+DROGON_TEST(LegacyModeHasNoAccountRoutes)
+{
+    // SYNC_AUTH_MODE defaults to legacy: no vaults, no internal/notify (even with SYNC_INTERNAL_TOKEN set)
+    CHECK(g_config.authMode == syncserver::AuthMode::Legacy);
+    for (const auto& path : {std::string("/vaults"),
+                             std::string("/vaults/3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b"),
+                             std::string("/vaults/3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b/history")}) {
+        auto resp = request(Get, path);
+        CHECK(resp->statusCode() == k404NotFound);
+        CHECK(json(resp)["error"].asString() == "Not found.");
+    }
+    CHECK(request(Put,
+                  "/vaults/3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b",
+                  {g_aliceToken, {{"If-None-Match", "*"}}, fakeDatabase("x")})
+              ->statusCode()
+          == k404NotFound);
+    Json::Value notify;
+    notify["subjects"].append("user:5a0b7c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d");
+    notify["event"] = "access";
+    notify["data"]["change"] = "granted";
+    CHECK(postJson("/internal/notify", notify, "internal-secret")->statusCode() == k404NotFound);
+    // A JWT is just an unknown token
+    CHECK(request(Get, "/databases", {"eyJhbGciOiJFZERTQSJ9.e30.c2ln"})->statusCode() == k401Unauthorized);
+}
+
+DROGON_TEST(AnswersCorsForTheHostedWebApp)
+{
+    auto client = HttpClient::newHttpClient(g_baseUrl);
+    auto preflight = HttpRequest::newHttpRequest();
+    preflight->setMethod(Options);
+    preflight->setPath("/api/v1/databases/main");
+    preflight->addHeader("Origin", "https://app.keepassxc.example");
+    preflight->addHeader("Access-Control-Request-Method", "PUT");
+    preflight->addHeader("Access-Control-Request-Private-Network", "true");
+    auto allowed = client->sendRequest(preflight, 10).second;
+    REQUIRE(allowed);
+    CHECK(allowed->statusCode() == k204NoContent);
+    CHECK(allowed->getHeader("Access-Control-Allow-Private-Network") == "true");
+    CHECK(allowed->getHeader("Access-Control-Allow-Origin") == "https://app.keepassxc.example");
+    CHECK(allowed->getHeader("Access-Control-Allow-Headers") == "Authorization, Content-Type, If-Match, If-None-Match");
+
+    auto list = HttpRequest::newHttpRequest();
+    list->setPath("/api/v1/databases");
+    list->addHeader("Origin", "https://app.keepassxc.example");
+    list->addHeader("Authorization", "Bearer " + g_aliceToken);
+    auto resp = client->sendRequest(list, 10).second;
+    REQUIRE(resp);
+    CHECK(resp->statusCode() == k200OK);
+    CHECK(resp->getHeader("Access-Control-Allow-Origin") == "https://app.keepassxc.example");
+    CHECK(resp->getHeader("Access-Control-Expose-Headers") == "ETag, X-Database-Revision, Last-Modified");
+
+    // Other origins get no CORS headers
+    list->removeHeader("Origin");
+    list->addHeader("Origin", "https://elsewhere.example");
+    auto other = client->sendRequest(list, 10).second;
+    REQUIRE(other);
+    CHECK(other->getHeader("Access-Control-Allow-Origin").empty());
+}
+
 DROGON_TEST(CreateReadUpdateWithOptimisticConcurrency)
 {
     CHECK(request(Get, "/databases/main")->statusCode() == k404NotFound);
@@ -815,6 +874,10 @@ int main(int argc, char** argv)
     config.maxDatabaseBytes = 1024;
     config.historySize = 2;
     config.threads = 4;
+    // Ignored in the default legacy mode, see LegacyModeHasNoAccountRoutes
+    config.internalToken = "internal-secret";
+    // A self-hosted server reachable from the hosted web app
+    config.allowedOrigins = {"https://app.keepassxc.example"};
     if (config.usesPostgres()) {
         // A schema and key prefix of its own, so runs don't see each other's data
         std::string run;

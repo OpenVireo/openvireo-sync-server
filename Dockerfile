@@ -37,9 +37,9 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSYNC_SERVER_WITH_CLOUD=ON \
     && cmake --build build --parallel "$(nproc)" \
     && cmake --install build --prefix /out
 
-# The API tests; they use Postgres and S3 when SYNC_DATABASE_URL and SYNC_S3_* are set
+# The API tests (legacy, both and jwt modes); they use Postgres and S3 when SYNC_DATABASE_URL and SYNC_S3_* are set
 FROM build AS test
-CMD ["/src/build/sync_server_test"]
+CMD ["ctest", "--test-dir", "/src/build", "--output-on-failure"]
 
 FROM debian:${DEBIAN_RELEASE}-slim AS runtime
 RUN apt-get update \
