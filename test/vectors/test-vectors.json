@@ -1,0 +1,301 @@
+{
+  "spec": "kpx v1",
+  "encoding": "binary values are base64url without padding unless the field name ends in _hex",
+  "generated_by": "gen.mjs with @noble/{curves,ciphers,hashes} 2.4.0 and kdbxweb 2.1.1",
+  "secret_key": [
+    {
+      "raw_hex": "1d70473b0c6e26718ef0f81d0312750f",
+      "display": "K1-3NR4EE-RCDRK-733QG-Z0EG6-4KN1W"
+    },
+    {
+      "raw_hex": "00000000000000000000000000000000",
+      "display": "K1-000000-00000-00000-00000-00000"
+    },
+    {
+      "raw_hex": "ffffffffffffffffffffffffffffffff",
+      "display": "K1-ZZZZZZ-ZZZZZ-ZZZZZ-ZZZZZ-ZZZZW"
+    }
+  ],
+  "auk": [
+    {
+      "password": "correct horse battery staple",
+      "password_nfkc_hex": "636f727265637420686f727365206261747465727920737461706c65",
+      "kdf": {
+        "alg": "argon2id",
+        "salt": "5kPDMld8IKvQZd8adDk3CA",
+        "m": 1024,
+        "t": 2,
+        "p": 1
+      },
+      "secret_key_hex": "1d70473b0c6e26718ef0f81d0312750f",
+      "argon2id_hex": "c07a598e478bb669deead01bbcce4990a176c95d6a2635296886875d857f2042",
+      "auk_hex": "8d5c8be066d1e0ecf0549edaddd1fa9f04e724c36ecbd442504ffcf7264353eb"
+    },
+    {
+      "password": "Ünïcödé pässwörd ﬁ",
+      "password_nfkc_hex": "c39c6ec3af63c3b664c3a92070c3a4737377c3b67264206669",
+      "kdf": {
+        "alg": "argon2id",
+        "salt": "5kPDMld8IKvQZd8adDk3CA",
+        "m": 1024,
+        "t": 2,
+        "p": 1
+      },
+      "secret_key_hex": "1d70473b0c6e26718ef0f81d0312750f",
+      "argon2id_hex": "399aaed5d2f1545f5481aee568c8713d18f04544ab73081525027f3bf7704ee5",
+      "auk_hex": "c85f4d193149b3f2741048a4a64935d85bdfe24c8688138fb67afcebb9edbf56"
+    },
+    {
+      "password": "correct horse battery staple",
+      "password_nfkc_hex": "636f727265637420686f727365206261747465727920737461706c65",
+      "kdf": {
+        "alg": "argon2id",
+        "salt": "DcME-Cq2c3yLKVzbtFNirg",
+        "m": 65536,
+        "t": 3,
+        "p": 1
+      },
+      "secret_key_hex": "1d70473b0c6e26718ef0f81d0312750f",
+      "argon2id_hex": "d7c21306ceb90f9beadae8df92370cbe5d9ee7d8e35396a82b3c7d0a9155819c",
+      "auk_hex": "42ceae1e36cc8f4090e25b0449cde35e960c8439c800c37eb7111835aef00b84"
+    }
+  ],
+  "keyset": {
+    "principal": "user:alice",
+    "auk_hex": "8d5c8be066d1e0ecf0549edaddd1fa9f04e724c36ecbd442504ffcf7264353eb",
+    "enc_sk_hex": "d443180d44540cb64ebc5b64fa453ed946caa640592c66ad39f6c397fccb1c83",
+    "sign_seed_hex": "8a3e3c0244a8585a6e180474c8ca32d286a6f7f845cb5d2cd525a0136669cef9",
+    "nonce_hex": "ed25e807b7390e4b571579fde15d839be1a1698bf2e611ce",
+    "aad": "kpx-keyset-v1",
+    "public": {
+      "enc_pk": "y7hy02zFJzmqnjL1nzp5jmDo3gzTuN6aNBIfRkZxeQs",
+      "sign_pk": "uF8QP332-YoxYvcH-8hcGb_mpPOOGnl6jBikNNgwTrI",
+      "sig": "EekiSMIVrot99rD-zJTXJATsJZI-amThrP_qM4WgWzMzeZu63Gvjm_-_wfm_E924rzoPvrmKdCYjsb-ERhhtAQ",
+      "fingerprint": "6b79 6584 5cc2 ea89 bd8b 8104 e019 c081 dec1 77ea"
+    },
+    "wrapped": "Ae0l6Ae3OQ5LVxV5_eFdg5vhoWmL8uYRzh5WCbelIWLQD5Qa4eCIZq3YPgFUA5e6HQfbi7O4h4vCDeUIah_h8zb4iG8cxclG6vQPSnKmFUR46HgQirw-ornAllOA4rk9TXCUbOZe045u"
+  },
+  "public_keys": [
+    {
+      "principal": "user:bob",
+      "enc_sk_hex": "0398890d86e993f6ed5878aad50388f46faa5a47f1ae0967a13a62cd37b1c410",
+      "sign_seed_hex": "8eec6f6dbbbcbc7193d4daaf6000d8cc8b02909ed66c0d6082d05f6138c3ffe3",
+      "enc_pk": "TJa6O0bYN9IAcVduFSM5Snn6Q7caDLTzYvd_0TAp7gw",
+      "sign_pk": "muWp6gZNGAM2SiZk7iY8uZmgrLa_D_T8O8GtzunVlqY",
+      "sig": "RqT7k5TrH0KtkyUcPNGQce8cLPfBzJBOopO-McWUgPdSg8x4HQZnJOx6UHJvJ-4Lb3sZAj-f5DAEuDbzLpT6BA",
+      "fingerprint": "6d6d 90cc f75f 3156 3e64 0812 b453 bef5 28cb e244"
+    }
+  ],
+  "seal": [
+    {
+      "recipient_enc_pk": "y7hy02zFJzmqnjL1nzp5jmDo3gzTuN6aNBIfRkZxeQs",
+      "recipient_enc_sk_hex": "d443180d44540cb64ebc5b64fa453ed946caa640592c66ad39f6c397fccb1c83",
+      "ephemeral_sk_hex": "e1f54e7bac99bcc3d88d206f953cb0567783f094a6db84513edcc6132071221f",
+      "ephemeral_pk_hex": "392a914b4a80ade33f59ab56e3aa01e6f13af40ada763365d6b1f69f98643672",
+      "nonce_hex": "4d52570a06f3802f8aa23f75a86eaece0c4eabed7fe48eb5",
+      "aad": "kpx-vault-key|3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b",
+      "plaintext_hex": "f4d9b93a3265f8305aacc3c80a0757b884976e8a0433ab69d6401c8c9d8a49f2",
+      "derived_key_hex": "1245698cc8532068ff3017434a921c2d25867302e631fe3e4748da9d119f12c6",
+      "sealed": "ATkqkUtKgK3jP1mrVuOqAebxOvQK2nYzZdax9p-YZDZyTVJXCgbzgC-Koj91qG6uzgxOq-1_5I61zAkH68etIdaCmJoUnXgSULonL3Jw7Q-ZEA9_eJ2bCflO05fKqLFjotiJqG0pEIKw"
+    },
+    {
+      "recipient_enc_pk": "TJa6O0bYN9IAcVduFSM5Snn6Q7caDLTzYvd_0TAp7gw",
+      "recipient_enc_sk_hex": "0398890d86e993f6ed5878aad50388f46faa5a47f1ae0967a13a62cd37b1c410",
+      "ephemeral_sk_hex": "601ab68bcf374dcb60f5ba44d9ebf25325f366e128578f756579e9d974055b30",
+      "ephemeral_pk_hex": "59a419d3df06969b5c94050fe74ca3e66337d6b279c6c458e893345903bc0974",
+      "nonce_hex": "10e14874b17a25e92b2599964a22f17211b4b8966f999233",
+      "aad": "kpx-vault-key|3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b",
+      "plaintext_hex": "f4d9b93a3265f8305aacc3c80a0757b884976e8a0433ab69d6401c8c9d8a49f2",
+      "derived_key_hex": "0320299d01e86512490a72c74650466ef06d940b512d44ff262092f4953929a3",
+      "sealed": "AVmkGdPfBpabXJQFD-dMo-ZjN9ayecbEWOiTNFkDvAl0EOFIdLF6JekrJZmWSiLxchG0uJZvmZIzDR0BdyS5a7g5BQ7LVKiNH5VqZWjS-cOQn-xCxHsfn6O3bHI5puTKPzFcywtbzngr"
+    }
+  ],
+  "seal_negative": [
+    {
+      "case": "wrong aad (other vault)",
+      "sealed": "ATkqkUtKgK3jP1mrVuOqAebxOvQK2nYzZdax9p-YZDZyTVJXCgbzgC-Koj91qG6uzgxOq-1_5I61zAkH68etIdaCmJoUnXgSULonL3Jw7Q-ZEA9_eJ2bCflO05fKqLFjotiJqG0pEIKw",
+      "recipient_enc_sk_hex": "d443180d44540cb64ebc5b64fa453ed946caa640592c66ad39f6c397fccb1c83",
+      "aad": "kpx-vault-key|00000000-0000-0000-0000-000000000000",
+      "expect": "decryption failure"
+    },
+    {
+      "case": "wrong recipient",
+      "sealed": "ATkqkUtKgK3jP1mrVuOqAebxOvQK2nYzZdax9p-YZDZyTVJXCgbzgC-Koj91qG6uzgxOq-1_5I61zAkH68etIdaCmJoUnXgSULonL3Jw7Q-ZEA9_eJ2bCflO05fKqLFjotiJqG0pEIKw",
+      "recipient_enc_sk_hex": "0398890d86e993f6ed5878aad50388f46faa5a47f1ae0967a13a62cd37b1c410",
+      "aad": "kpx-vault-key|3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b",
+      "expect": "decryption failure"
+    },
+    {
+      "case": "unknown version byte",
+      "sealed": "AjkqkUtKgK3jP1mrVuOqAebxOvQK2nYzZdax9p-YZDZyTVJXCgbzgC-Koj91qG6uzgxOq-1_5I61zAkH68etIdaCmJoUnXgSULonL3Jw7Q-ZEA9_eJ2bCflO05fKqLFjotiJqG0pEIKw",
+      "recipient_enc_sk_hex": "d443180d44540cb64ebc5b64fa453ed946caa640592c66ad39f6c397fccb1c83",
+      "aad": "kpx-vault-key|3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b",
+      "expect": "unsupported version"
+    }
+  ],
+  "vault_name": {
+    "vault_id": "3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b",
+    "vault_key_hex": "f4d9b93a3265f8305aacc3c80a0757b884976e8a0433ab69d6401c8c9d8a49f2",
+    "name_key_hex": "d6a6669e7d85415a2f7fcd6c0d9925076d9623867c1b5ec22fecbebb230a98f8",
+    "name": "Team Infrastructure",
+    "nonce_hex": "da48aca3c9302033b9c74d40b40985dca7296a614a927604",
+    "aad": "kpx-vault-name|3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b",
+    "encrypted_name": "AdpIrKPJMCAzucdNQLQJhdynKWphSpJ2BMT0E1cDRIj_GocQDCd5xRXnttjE0d1NnVFrPzyikePmroO_"
+  },
+  "service_account": {
+    "sa_id": "9b2e4f61-0c3a-4d7e-8f15-a2b3c4d5e6f7",
+    "payload_json": "{\"v\":1,\"url\":\"https://accounts.keepassxc.example\",\"sa_id\":\"9b2e4f61-0c3a-4d7e-8f15-a2b3c4d5e6f7\",\"secret\":\"oJuVDH0wu3hAn0nlrhKdyXWPjPZ_ZBVOY3rWKl07i8o\",\"kek\":\"cJsHoL9km79N8HshlixEsxLJF4DvN3rReWbuxCoFO4k\"}",
+    "token": "kpx_sa_eyJ2IjoxLCJ1cmwiOiJodHRwczovL2FjY291bnRzLmtlZXBhc3N4Yy5leGFtcGxlIiwic2FfaWQiOiI5YjJlNGY2MS0wYzNhLTRkN2UtOGYxNS1hMmIzYzRkNWU2ZjciLCJzZWNyZXQiOiJvSnVWREgwd3UzaEFuMG5scmhLZHlYV1BqUFpfWkJWT1kzcldLbDA3aThvIiwia2VrIjoiY0pzSG9MOWttNzlOOEhzaGxpeEVzeExKRjREdk4zclJlV2J1eENvRk80ayJ9",
+    "secret_hash_hex": "aa322cb774386af6af47b739f80b92d9fe3f5dfb7e2690fd0ae48f28621343d8",
+    "secret_prefix": "oJuVDH0w",
+    "master_key_hex": "92dde60013512e46f6b2822bb1805350355d584c6862f5427ef40f48dbeafdbb",
+    "kek_hex": "709b07a0bf649bbf4df07b21962c44b312c91780ef377ad17966eec42a053b89",
+    "wrapped_master": "AdofgqXv1HKJRTbNlrLa6nFqBLCVxq47TKSI5qJezLWQH04_tzB7E9nv8NRHB5uKgeFVhXx_CxazjLy5G3-ScPWYH_R2i8l-aw",
+    "wrapped_master_nonce_hex": "da1f82a5efd472894536cd96b2daea716a04b095c6ae3b4c",
+    "wrapped_master_aad": "kpx-sa-master-v1|9b2e4f61-0c3a-4d7e-8f15-a2b3c4d5e6f7",
+    "keyset_enc_sk_hex": "0962723145a169eca71c7e47587135d1b50d9b625bc2316ecc13fdbd4d331e95",
+    "keyset_sign_seed_hex": "50d52c173287d24154ba89f7e3257ddd9b0a2402b028ee5ce1ba56f24aa05318",
+    "public": {
+      "enc_pk": "ciwSEEODH53t7GMVr4WTMGmghUZq1WR-yEACO2ckpjw",
+      "sign_pk": "m765KoOEpylYzGH2uovsFY67Uh8-5tF0HFYPqpwF4W8",
+      "sig": "umteClyaWtLRzpTXRIql9btzs0LkaTcut7tMK_zVkBo-vNb4U8HSvyG9Xs9nEQStGpjetoUkC3oxORMCdutwDQ",
+      "fingerprint": "3f69 111a be8d 7036 61ee c7cd f49f 4ae3 6216 6daa"
+    },
+    "wrapped_keyset": "AQ-xQpej9ZwBOeR4ZZLj-N1tuTf6Pko454I5XHHy5vz5vt9QRLONLVGrodg5Lnxz93vAY3LJz_dMa3BXidhD1UPl3psmZEGsUxuWeRzcAj6vsQxfI0odTDpfgEDHWyKbNiuOVx_4fPC6",
+    "wrapped_keyset_nonce_hex": "0fb14297a3f59c0139e4786592e3f8dd6db937fa3e4a38e7",
+    "master_sealed_to_admin": {
+      "admin": "user:alice",
+      "ephemeral_sk_hex": "9cc39a57f5be6c81e581088f34f8285193a1060c12721907db19d8f8538b0930",
+      "nonce_hex": "7ce9fc75f3658d6ffb9cfdeb69e842d84a645d688c9d94ac",
+      "aad": "kpx-sa-master-v1|9b2e4f61-0c3a-4d7e-8f15-a2b3c4d5e6f7",
+      "sealed": "AfGitsyj0B9Ba8E6xbyQeaqf3bHkEe-Z0j9ZszHeH-50fOn8dfNljW_7nP3raehC2EpkXWiMnZSsNuxKTcbcgZkZt5_XQpjmgSp23e7yhiSxHWVkmNtmEA_eGQHUTbymJuLVvBUTHyZS"
+    }
+  },
+  "refresh_token": {
+    "token": "kpx_rt_B3vLoYE0UEShYiENN4gMoE8P8NQNRswoBUkdP1l50NQ",
+    "stored_hash_hex": "41164f25b675d9188b69be2bf8ed0a295acfc9d086252026b29c61ee422d13c0"
+  },
+  "jwt": {
+    "signing_seed_hex": "a8573ae2ed1ed4ea005612b3428bd9a2bc349b74f040bba893496ab6d3ceaa20",
+    "jwks": {
+      "keys": [
+        {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "2Om3KydIpON6czU7nhQR59ih9ZUvAAtbq0OBWnRcqDA",
+          "kid": "test-2026-10",
+          "use": "sig",
+          "alg": "EdDSA"
+        }
+      ]
+    },
+    "now": 1792224060,
+    "valid": [
+      {
+        "claims": {
+          "iss": "https://accounts.keepassxc.example",
+          "aud": [
+            "kpx-api",
+            "kpx-sync"
+          ],
+          "sub": "user:5a0b7c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+          "dev": "d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f70",
+          "vlt": [
+            {
+              "id": "3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b",
+              "r": "manage"
+            },
+            {
+              "id": "6c7d8e9f-0a1b-4c2d-8e3f-4a5b6c7d8e9f",
+              "r": "read"
+            }
+          ],
+          "iat": 1792224000,
+          "nbf": 1792224000,
+          "exp": 1792224600,
+          "jti": "0d3c1b2a-4f5e-4a6b-9c7d-8e9f0a1b2c3d"
+        },
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtMjAyNi0xMCJ9.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmtlZXBhc3N4Yy5leGFtcGxlIiwiYXVkIjpbImtweC1hcGkiLCJrcHgtc3luYyJdLCJzdWIiOiJ1c2VyOjVhMGI3YzFkLTJlM2YtNGE1Yi04YzZkLTdlOGY5YTBiMWMyZCIsImRldiI6ImQ0ZTVmNmE3LWI4YzktNGQwZS05ZjFhLTJiM2M0ZDVlNmY3MCIsInZsdCI6W3siaWQiOiIzZjFjMmE5ZS03YjRkLTRlOGEtOWMyMS01ZDZlN2Y4MDlhMWIiLCJyIjoibWFuYWdlIn0seyJpZCI6IjZjN2Q4ZTlmLTBhMWItNGMyZC04ZTNmLTRhNWI2YzdkOGU5ZiIsInIiOiJyZWFkIn1dLCJpYXQiOjE3OTIyMjQwMDAsIm5iZiI6MTc5MjIyNDAwMCwiZXhwIjoxNzkyMjI0NjAwLCJqdGkiOiIwZDNjMWIyYS00ZjVlLTRhNmItOWM3ZC04ZTlmMGExYjJjM2QifQ.SsMuGSlAQ_zi-2dBVr0rcrKHn2nn6Hqp9nzog43ey8tDJnXS7Mi1XVJFxTk4X3c1CUMgC-9FCoarNIdmLUezAA"
+      },
+      {
+        "claims": {
+          "iss": "https://accounts.keepassxc.example",
+          "aud": [
+            "kpx-api",
+            "kpx-sync"
+          ],
+          "sub": "sa:9b2e4f61-0c3a-4d7e-8f15-a2b3c4d5e6f7",
+          "org": "7e8f9a0b-1c2d-4e3f-8a5b-6c7d8e9f0a1b",
+          "vlt": [
+            {
+              "id": "3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b",
+              "r": "write"
+            }
+          ],
+          "iat": 1792224000,
+          "nbf": 1792224000,
+          "exp": 1792224600,
+          "jti": "1e2f3a4b-5c6d-4e7f-8a9b-0c1d2e3f4a5b"
+        },
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtMjAyNi0xMCJ9.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmtlZXBhc3N4Yy5leGFtcGxlIiwiYXVkIjpbImtweC1hcGkiLCJrcHgtc3luYyJdLCJzdWIiOiJzYTo5YjJlNGY2MS0wYzNhLTRkN2UtOGYxNS1hMmIzYzRkNWU2ZjciLCJvcmciOiI3ZThmOWEwYi0xYzJkLTRlM2YtOGE1Yi02YzdkOGU5ZjBhMWIiLCJ2bHQiOlt7ImlkIjoiM2YxYzJhOWUtN2I0ZC00ZThhLTljMjEtNWQ2ZTdmODA5YTFiIiwiciI6IndyaXRlIn1dLCJpYXQiOjE3OTIyMjQwMDAsIm5iZiI6MTc5MjIyNDAwMCwiZXhwIjoxNzkyMjI0NjAwLCJqdGkiOiIxZTJmM2E0Yi01YzZkLTRlN2YtOGE5Yi0wYzFkMmUzZjRhNWIifQ.I8nNS46d6wduSY0cflCtzIXU5XyUgO7IH1OuZyw_rS8TyL4JbXLvQJWtmuzopz27_1YAltNMAzDortnh1tU6DA"
+      }
+    ],
+    "invalid": [
+      {
+        "case": "expired",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtMjAyNi0xMCJ9.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmtlZXBhc3N4Yy5leGFtcGxlIiwiYXVkIjpbImtweC1hcGkiLCJrcHgtc3luYyJdLCJzdWIiOiJ1c2VyOjVhMGI3YzFkLTJlM2YtNGE1Yi04YzZkLTdlOGY5YTBiMWMyZCIsImRldiI6ImQ0ZTVmNmE3LWI4YzktNGQwZS05ZjFhLTJiM2M0ZDVlNmY3MCIsInZsdCI6W3siaWQiOiIzZjFjMmE5ZS03YjRkLTRlOGEtOWMyMS01ZDZlN2Y4MDlhMWIiLCJyIjoibWFuYWdlIn0seyJpZCI6IjZjN2Q4ZTlmLTBhMWItNGMyZC04ZTNmLTRhNWI2YzdkOGU5ZiIsInIiOiJyZWFkIn1dLCJpYXQiOjE3OTIyMjQwMDAsIm5iZiI6MTc5MjIyNDAwMCwiZXhwIjoxNzkyMjI0MDMwLCJqdGkiOiIwZDNjMWIyYS00ZjVlLTRhNmItOWM3ZC04ZTlmMGExYjJjM2QifQ.Pe3-C5cM6BdCEWEI2K_K4dWTQ15CLmdlekZ3ZmQHw2n282Tc2gi66PuAE3UmDM2wED8lSb8IOW5HO5QPUFOyDg",
+        "expect": 401
+      },
+      {
+        "case": "not yet valid",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtMjAyNi0xMCJ9.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmtlZXBhc3N4Yy5leGFtcGxlIiwiYXVkIjpbImtweC1hcGkiLCJrcHgtc3luYyJdLCJzdWIiOiJ1c2VyOjVhMGI3YzFkLTJlM2YtNGE1Yi04YzZkLTdlOGY5YTBiMWMyZCIsImRldiI6ImQ0ZTVmNmE3LWI4YzktNGQwZS05ZjFhLTJiM2M0ZDVlNmY3MCIsInZsdCI6W3siaWQiOiIzZjFjMmE5ZS03YjRkLTRlOGEtOWMyMS01ZDZlN2Y4MDlhMWIiLCJyIjoibWFuYWdlIn0seyJpZCI6IjZjN2Q4ZTlmLTBhMWItNGMyZC04ZTNmLTRhNWI2YzdkOGU5ZiIsInIiOiJyZWFkIn1dLCJpYXQiOjE3OTIyMjQwMDAsIm5iZiI6MTc5MjIyNzYwMCwiZXhwIjoxNzkyMjI0NjAwLCJqdGkiOiIwZDNjMWIyYS00ZjVlLTRhNmItOWM3ZC04ZTlmMGExYjJjM2QifQ.J3qgG3aNcjnHK5sQzxtn_MQFz1O_B_IgXxgn175mBxmYDK0ZT36l3p42uivLrZkjVYQXnZ6CqAyPwOQM7g2BBQ",
+        "expect": 401
+      },
+      {
+        "case": "wrong audience",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtMjAyNi0xMCJ9.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmtlZXBhc3N4Yy5leGFtcGxlIiwiYXVkIjpbImtweC1hcGkiXSwic3ViIjoidXNlcjo1YTBiN2MxZC0yZTNmLTRhNWItOGM2ZC03ZThmOWEwYjFjMmQiLCJkZXYiOiJkNGU1ZjZhNy1iOGM5LTRkMGUtOWYxYS0yYjNjNGQ1ZTZmNzAiLCJ2bHQiOlt7ImlkIjoiM2YxYzJhOWUtN2I0ZC00ZThhLTljMjEtNWQ2ZTdmODA5YTFiIiwiciI6Im1hbmFnZSJ9LHsiaWQiOiI2YzdkOGU5Zi0wYTFiLTRjMmQtOGUzZi00YTViNmM3ZDhlOWYiLCJyIjoicmVhZCJ9XSwiaWF0IjoxNzkyMjI0MDAwLCJuYmYiOjE3OTIyMjQwMDAsImV4cCI6MTc5MjIyNDYwMCwianRpIjoiMGQzYzFiMmEtNGY1ZS00YTZiLTljN2QtOGU5ZjBhMWIyYzNkIn0.GIL-Ii4IVEApBm58HYK1QvfpeRDl0pd2FzS06Ywf-y2QjTsbJQizFD3iKpOCDZ-1pLmlmy_rrAJCI1y_gOcdAQ",
+        "expect": 401
+      },
+      {
+        "case": "wrong issuer",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtMjAyNi0xMCJ9.eyJpc3MiOiJodHRwczovL2V2aWwuZXhhbXBsZSIsImF1ZCI6WyJrcHgtYXBpIiwia3B4LXN5bmMiXSwic3ViIjoidXNlcjo1YTBiN2MxZC0yZTNmLTRhNWItOGM2ZC03ZThmOWEwYjFjMmQiLCJkZXYiOiJkNGU1ZjZhNy1iOGM5LTRkMGUtOWYxYS0yYjNjNGQ1ZTZmNzAiLCJ2bHQiOlt7ImlkIjoiM2YxYzJhOWUtN2I0ZC00ZThhLTljMjEtNWQ2ZTdmODA5YTFiIiwiciI6Im1hbmFnZSJ9LHsiaWQiOiI2YzdkOGU5Zi0wYTFiLTRjMmQtOGUzZi00YTViNmM3ZDhlOWYiLCJyIjoicmVhZCJ9XSwiaWF0IjoxNzkyMjI0MDAwLCJuYmYiOjE3OTIyMjQwMDAsImV4cCI6MTc5MjIyNDYwMCwianRpIjoiMGQzYzFiMmEtNGY1ZS00YTZiLTljN2QtOGU5ZjBhMWIyYzNkIn0.kjmDfn8MFy10sKGXqHUoTw2EkwXivQHcYKvhCww0aejIhokMULTybRDHMBrZbGvA-HfqW8Ruy9Tn0PqumLksDQ",
+        "expect": 401
+      },
+      {
+        "case": "bad signature",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtMjAyNi0xMCJ9.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmtlZXBhc3N4Yy5leGFtcGxlIiwiYXVkIjpbImtweC1hcGkiLCJrcHgtc3luYyJdLCJzdWIiOiJ1c2VyOjVhMGI3YzFkLTJlM2YtNGE1Yi04YzZkLTdlOGY5YTBiMWMyZCIsImRldiI6ImQ0ZTVmNmE3LWI4YzktNGQwZS05ZjFhLTJiM2M0ZDVlNmY3MCIsInZsdCI6W3siaWQiOiIzZjFjMmE5ZS03YjRkLTRlOGEtOWMyMS01ZDZlN2Y4MDlhMWIiLCJyIjoibWFuYWdlIn0seyJpZCI6IjZjN2Q4ZTlmLTBhMWItNGMyZC04ZTNmLTRhNWI2YzdkOGU5ZiIsInIiOiJyZWFkIn1dLCJpYXQiOjE3OTIyMjQwMDAsIm5iZiI6MTc5MjIyNDAwMCwiZXhwIjoxNzkyMjI0NjAwLCJqdGkiOiIwZDNjMWIyYS00ZjVlLTRhNmItOWM3ZC04ZTlmMGExYjJjM2QifQ.tZKPBcMMDEB6xF4XVUbIZS7nQ-dt9bmncD0qtA8SMx9B5_w-7-7qU3xH90fn-jlLyDf1timHuCTIwKcHzpUeCg",
+        "expect": 401
+      },
+      {
+        "case": "unknown kid (verifier refetches JWKS once, then rejects)",
+        "token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InVua25vd24ta2lkIn0.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmtlZXBhc3N4Yy5leGFtcGxlIiwiYXVkIjpbImtweC1hcGkiLCJrcHgtc3luYyJdLCJzdWIiOiJ1c2VyOjVhMGI3YzFkLTJlM2YtNGE1Yi04YzZkLTdlOGY5YTBiMWMyZCIsImRldiI6ImQ0ZTVmNmE3LWI4YzktNGQwZS05ZjFhLTJiM2M0ZDVlNmY3MCIsInZsdCI6W3siaWQiOiIzZjFjMmE5ZS03YjRkLTRlOGEtOWMyMS01ZDZlN2Y4MDlhMWIiLCJyIjoibWFuYWdlIn0seyJpZCI6IjZjN2Q4ZTlmLTBhMWItNGMyZC04ZTNmLTRhNWI2YzdkOGU5ZiIsInIiOiJyZWFkIn1dLCJpYXQiOjE3OTIyMjQwMDAsIm5iZiI6MTc5MjIyNDAwMCwiZXhwIjoxNzkyMjI0NjAwLCJqdGkiOiIwZDNjMWIyYS00ZjVlLTRhNmItOWM3ZC04ZTlmMGExYjJjM2QifQ.tBwpv1WDEmQJIG5hdWDFPGT4TCMpbZQ67DZMA-74F2aig4wpZw4C7aFQaODXCyMDKHc2SrEtHte0rcEMqvO6Bw",
+        "expect": 401
+      },
+      {
+        "case": "alg none",
+        "token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIiwia2lkIjoidGVzdC0yMDI2LTEwIn0.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmtlZXBhc3N4Yy5leGFtcGxlIiwiYXVkIjpbImtweC1hcGkiLCJrcHgtc3luYyJdLCJzdWIiOiJ1c2VyOjVhMGI3YzFkLTJlM2YtNGE1Yi04YzZkLTdlOGY5YTBiMWMyZCIsImRldiI6ImQ0ZTVmNmE3LWI4YzktNGQwZS05ZjFhLTJiM2M0ZDVlNmY3MCIsInZsdCI6W3siaWQiOiIzZjFjMmE5ZS03YjRkLTRlOGEtOWMyMS01ZDZlN2Y4MDlhMWIiLCJyIjoibWFuYWdlIn0seyJpZCI6IjZjN2Q4ZTlmLTBhMWItNGMyZC04ZTNmLTRhNWI2YzdkOGU5ZiIsInIiOiJyZWFkIn1dLCJpYXQiOjE3OTIyMjQwMDAsIm5iZiI6MTc5MjIyNDAwMCwiZXhwIjoxNzkyMjI0NjAwLCJqdGkiOiIwZDNjMWIyYS00ZjVlLTRhNmItOWM3ZC04ZTlmMGExYjJjM2QifQ.",
+        "expect": 401
+      }
+    ]
+  },
+  "vault_kdbx": {
+    "file": "vault-fixture.kdbx",
+    "vault_key_hex": "f4d9b93a3265f8305aacc3c80a0757b884976e8a0433ab69d6401c8c9d8a49f2",
+    "key_file_component": "the 32 raw vault key bytes (no password component)",
+    "kdf": {
+      "alg": "argon2id",
+      "m_kib": 1024,
+      "t": 2,
+      "p": 1
+    },
+    "expect": {
+      "root_group": "Team Infrastructure",
+      "entry": {
+        "Title": "GitHub deploy key",
+        "UserName": "ci-bot",
+        "Password": "hunter2-but-longer",
+        "URL": "https://github.com"
+      }
+    }
+  }
+}
