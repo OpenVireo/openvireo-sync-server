@@ -345,9 +345,8 @@ DROGON_TEST(VerifierAcceptsTheValidVectors)
 
 DROGON_TEST(VerifierRejectsTheInvalidVectors)
 {
-    // 31 s after the vectors' now: the "expired" vector expired 30 s before now, which the spec's 60 s of
-    // clock skew still accepts at now (see the next test); every other case fails at any time
-    int64_t now = g_vectorNow + 31;
+    // At the vectors' now every case fails, the "expired" one included (61 s past exp, see the next test)
+    int64_t now = g_vectorNow;
     int fetches = 0;
     auto jwks = compact(g_vectors["jwt"]["jwks"]);
     auto verifier = verifierAt(&now, &fetches, &jwks);
@@ -365,10 +364,12 @@ DROGON_TEST(VerifierAllowsSixtySecondsOfClockSkew)
     auto jwks = compact(g_vectors["jwt"]["jwks"]);
     auto verifier = verifierAt(&now, &fetches, &jwks);
     const auto expired = g_vectors["jwt"]["invalid"][0];
-    REQUIRE(expired["case"].asString() == "expired");
-    // exp = now - 30: within the skew
+    REQUIRE(expired["case"].asString().rfind("expired", 0) == 0);
+    // exp = 1792223999 = now - 61: past the skew at the vectors' time
+    CHECK(!verifier.verify(expired["token"].asString()).has_value());
+    now = 1792223999 + 59;
     CHECK(verifier.verify(expired["token"].asString()).has_value());
-    now = g_vectorNow + 30; // exp + 60
+    now = 1792223999 + 60;
     CHECK(!verifier.verify(expired["token"].asString()).has_value());
 
     // nbf = iat: 60 s early still works, 61 s doesn't
@@ -469,8 +470,7 @@ DROGON_TEST(VerifierRejectsMalformedTokens)
 
 DROGON_TEST(EveryInvalidVectorGets401)
 {
-    // See VerifierRejectsTheInvalidVectors for why 31 s after now
-    ClockAt clock(g_vectorNow + 31);
+    ClockAt clock(g_vectorNow);
     for (const auto& vector : g_vectors["jwt"]["invalid"]) {
         auto resp = request(Get, "/vaults", {vector["token"].asString()});
         CHECK(resp->statusCode() == vector["expect"].asInt());
