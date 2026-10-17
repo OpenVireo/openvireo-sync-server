@@ -23,6 +23,8 @@ services:
       SYNC_BEHIND_PROXY: "1"
       # SYNC_HISTORY_SIZE: "10"
       # SYNC_MAX_DB_BYTES: "52428800"
+      # Lets a web app on this origin use the server, e.g. the hosted web app (see README.md, Web apps)
+      # SYNC_ALLOWED_ORIGINS: "https://app.example.org"
     volumes:
       - data:/data
 
