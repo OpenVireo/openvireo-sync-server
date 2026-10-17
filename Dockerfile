@@ -3,8 +3,8 @@
 # The sync server with both storage backends: the data directory (default, mount a volume on /data) and
 # Postgres plus an S3-compatible bucket (set SYNC_DATABASE_URL and SYNC_S3_*). See README.md.
 #
-#   docker build -t keepassxc-sync-server sync_server
-#   docker build --target test -t keepassxc-sync-server-test sync_server   # the API tests, see compose.cloud.yaml
+#   docker build -t keepassxc-sync-server .
+#   docker build --target test -t keepassxc-sync-server-test .   # the API tests, see compose.cloud.yaml
 
 ARG DEBIAN_RELEASE=bookworm
 

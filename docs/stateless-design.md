@@ -1,12 +1,12 @@
 # Stateless Sync Server — Plan
 
-**Status:** Implemented on `feature/auto-sync`, except as noted in 7
+**Status:** Implemented (in KeePassXC's `feature/auto-sync`, before the server moved to this repository), except as noted in 7
 **Branch target:** `develop`
 **Last updated:** 2026-10-16
 
 ## 1. Goal
 
-Make `sync_server` run in a Docker container that keeps nothing on its own disk, with several instances behind a load
+Make the sync server run in a Docker container that keeps nothing on its own disk, with several instances behind a load
 balancer. The target deployment is DigitalOcean App Platform with a Managed PostgreSQL database and a Spaces bucket.
 Deploys use prebuilt images published from GitHub, so nothing is compiled at deploy time.
 
@@ -201,7 +201,7 @@ New commands:
 
 ### 3.8 Prebuilt images and the source-build fallback
 
-**Dependencies** move into `sync_server/vcpkg.json`: `drogon` with its `postgres` feature, and `aws-sdk-cpp` with
+**Dependencies** move into `vcpkg.json`: `drogon` with its `postgres` feature, and `aws-sdk-cpp` with
 `s3`, at pinned versions. The README's `brew install drogon` / `apt install libdrogon-dev` route keeps working for the
 filesystem mode; Postgres and S3 support are compiled in only when their dependencies are found
 (`SYNC_SERVER_WITH_CLOUD`, on by default with vcpkg).
@@ -210,8 +210,8 @@ filesystem mode; Postgres and S3 support are compiled in only when their depende
 
 | Image | Built from | When |
 |---|---|---|
-| `keepassxc-sync-server-builder` | `sync_server/docker/Dockerfile.builder`: Debian, compiler, CMake, vcpkg, and the manifest's dependencies already built | When `sync_server/vcpkg.json` or `Dockerfile.builder` changes |
-| `keepassxc-sync-server` | `sync_server/Dockerfile`: compiles the server on the builder image, copies the binary into a slim Debian runtime image, runs as a non-root user with `SYNC_HOST=0.0.0.0` and `SYNC_DATA_DIR=/data` | On every push to `develop` (tag `edge`) and on `sync-server-v*` tags (version tags and `latest`) |
+| `keepassxc-sync-server-builder` | `docker/Dockerfile.builder`: Debian, compiler, CMake, vcpkg, and the manifest's dependencies already built | When `vcpkg.json` or `Dockerfile.builder` changes |
+| `keepassxc-sync-server` | `Dockerfile`: compiles the server on the builder image, copies the binary into a slim Debian runtime image, runs as a non-root user with `SYNC_HOST=0.0.0.0` and `SYNC_DATA_DIR=/data` | On every push to `develop` (tag `edge`) and on `sync-server-v*` tags (version tags and `latest`) |
 
 The vcpkg Linux triplets build static libraries, so the server binary only needs glibc. Each `sync-server-v*` tag
 also attaches `keepassxc-sync-server-<version>-linux-<arch>.tar.gz` to a GitHub release, for running without Docker.
@@ -221,18 +221,18 @@ from GHCR, the workflow also pushes to DigitalOcean Container Registry.
 
 **The fallback** is building from source:
 
-- `docker build sync_server` uses the published builder image, so only the server compiles (about a minute).
-- `docker build -f sync_server/docker/Dockerfile.builder -t builder sync_server`, then
-  `docker build --build-arg BUILDER_IMAGE=builder sync_server`, builds everything from scratch with no prebuilt
+- `docker build .` uses the published builder image, so only the server compiles (about a minute).
+- `docker build -f docker/Dockerfile.builder -t builder .`, then
+  `docker build --build-arg BUILDER_IMAGE=builder .`, builds everything from scratch with no prebuilt
   images, for anyone who doesn't want to trust them.
 - CMake directly, as today.
 
 **Other files**
 
-- `sync_server/compose.yaml`: the server with Postgres and MinIO, for development and the second test run (5).
-- `sync_server/.do/app.yaml`: the service from the published image (`http_port` matching `SYNC_PORT`, health check on
+- `compose.yaml`: the server with Postgres and MinIO, for development and the second test run (5).
+- `.do/app.yaml`: the service from the published image (`http_port` matching `SYNC_PORT`, health check on
   `/api/v1/health`), a pre-deploy `migrate` job, the managed database, and the Spaces settings as secrets.
-- `.github/workflows/sync-server.yml`: builds and tests on pull requests that touch `sync_server/`, and publishes the
+- `.github/workflows/sync-server.yml`: builds and tests on pull requests that touch the server, and publishes the
   images and release archives as above.
 
 **To check on App Platform** before relying on it: pulling from GHCR, the request body size limit (uploads go up to
@@ -266,7 +266,7 @@ Each phase is one PR. Phases 1 and 2 change no behaviour.
   - history pruning deletes the right blobs and never one that a row still references;
   - the sweep deletes an unreferenced old blob and keeps a new one;
   - `import` of a data directory with history and a legacy token, after which existing clients' ETags still match.
-- `tests/TestRemoteSyncServer.cpp` and `tests/gui/TestGuiAutoSync.cpp` run unchanged against a server started from
+- KeePassXC's `tests/TestRemoteSyncServer.cpp` and `tests/gui/TestGuiAutoSync.cpp` run unchanged against a server started from
   the published image, in both modes.
 
 ## 6. Follow-ups, not in scope

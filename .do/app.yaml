@@ -1,6 +1,6 @@
 # DigitalOcean App Platform: stateless instances with a managed Postgres database and a Spaces bucket.
 #
-#   doctl apps create --spec sync_server/.do/app.yaml
+#   doctl apps create --spec .do/app.yaml
 #
 # Before applying:
 #   - set the GitHub repository and branch below (or deploy a prebuilt image, see the comment),
@@ -23,11 +23,10 @@ services:
     #     repository: keepassxc-sync-server
     #     tag: latest
     github:
-      repo: <owner>/keepassxc
-      branch: develop
+      repo: <owner>/keepassxc-sync-server
+      branch: main
       deploy_on_push: true
-    source_dir: sync_server
-    dockerfile_path: sync_server/Dockerfile
+    dockerfile_path: Dockerfile
     http_port: 8787
     instance_count: 2
     instance_size_slug: apps-s-1vcpu-1gb
