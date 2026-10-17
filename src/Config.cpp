@@ -100,6 +100,66 @@ namespace syncserver
             && config.databaseSchema.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos) {
             throw std::runtime_error("SYNC_DATABASE_SCHEMA may only contain lower case letters, digits and \"_\"");
         }
+        auto mode = stringFromEnv("SYNC_AUTH_MODE");
+        if (mode.empty() || mode == "legacy") {
+            config.authMode = AuthMode::Legacy;
+        } else if (mode == "jwt") {
+            config.authMode = AuthMode::Jwt;
+        } else if (mode == "both") {
+            config.authMode = AuthMode::Both;
+        } else {
+            throw std::runtime_error("SYNC_AUTH_MODE must be legacy, jwt or both, got \"" + mode + "\"");
+        }
+        config.authJwksUrl = stringFromEnv("SYNC_AUTH_JWKS_URL");
+        config.authIssuer = stringFromEnv("SYNC_AUTH_ISSUER");
+        if (auto audience = stringFromEnv("SYNC_AUTH_AUDIENCE"); !audience.empty()) {
+            config.authAudience = audience;
+        }
+        config.internalToken = stringFromEnv("SYNC_INTERNAL_TOKEN");
+        config.allowedOrigins = parseOrigins(stringFromEnv("SYNC_ALLOWED_ORIGINS"));
+        config.validateAuth();
         return config;
+    }
+
+    std::vector<std::string> Config::parseOrigins(const std::string& list)
+    {
+        std::vector<std::string> origins;
+        size_t start = 0;
+        while (start <= list.size()) {
+            auto end = list.find(',', start);
+            if (end == std::string::npos) {
+                end = list.size();
+            }
+            auto origin = list.substr(start, end - start);
+            origin.erase(0, origin.find_first_not_of(" \t"));
+            origin.erase(origin.find_last_not_of(" \t") + 1);
+            // Browsers send the origin without a path or trailing slash
+            while (!origin.empty() && origin.back() == '/') {
+                origin.pop_back();
+            }
+            if (!origin.empty()) {
+                if (origin != "*" && origin.rfind("http://", 0) != 0 && origin.rfind("https://", 0) != 0) {
+                    throw std::runtime_error(
+                        "SYNC_ALLOWED_ORIGINS holds origins such as https://app.example.org, got \"" + origin + "\"");
+                }
+                origins.push_back(origin);
+            }
+            start = end + 1;
+        }
+        return origins;
+    }
+
+    void Config::validateAuth() const
+    {
+        if (authMode == AuthMode::Legacy) {
+            return;
+        }
+        if (authJwksUrl.empty() || authIssuer.empty()) {
+            throw std::runtime_error("SYNC_AUTH_MODE=jwt or both needs SYNC_AUTH_JWKS_URL (the auth server's "
+                                     "/.well-known/jwks.json) and SYNC_AUTH_ISSUER (its issuer URL)");
+        }
+        if (authJwksUrl.rfind("http://", 0) != 0 && authJwksUrl.rfind("https://", 0) != 0) {
+            throw std::runtime_error("SYNC_AUTH_JWKS_URL must be an http:// or https:// URL");
+        }
     }
 } // namespace syncserver

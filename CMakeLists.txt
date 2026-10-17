@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Drogon CONFIG REQUIRED)
+# Ed25519 signatures of account access tokens (JWT). Drogon's TLS already pulls in OpenSSL.
+find_package(OpenSSL 1.1.1 REQUIRED)
 # Users, devices and pairing codes in the data directory. Found by hand: Drogon puts its own FindSQLite3.cmake
 # on the module path, which hides CMake's and defines other targets.
 find_path(SQLITE3_INCLUDE_DIR sqlite3.h)
@@ -37,16 +39,16 @@ message(STATUS "Postgres and S3 storage: ${WITH_CLOUD}")
 add_library(sync_server_core STATIC
     src/Config.cpp
     src/DatabaseStore.cpp
+    src/Jwt.cpp
     src/Storage.cpp
     src/SyncApi.cpp
     src/UserStore.cpp
     src/Util.cpp
 )
 target_include_directories(sync_server_core PUBLIC src)
-target_link_libraries(sync_server_core PUBLIC Drogon::Drogon sync_sqlite3)
+target_link_libraries(sync_server_core PUBLIC Drogon::Drogon OpenSSL::Crypto sync_sqlite3)
 
 if(WITH_CLOUD)
-    find_package(OpenSSL REQUIRED)
     target_sources(sync_server_core PRIVATE
         src/BlobStore.cpp
         src/Import.cpp
@@ -55,7 +57,6 @@ if(WITH_CLOUD)
         src/Postgres.cpp
     )
     target_compile_definitions(sync_server_core PUBLIC SYNC_SERVER_WITH_CLOUD)
-    target_link_libraries(sync_server_core PUBLIC OpenSSL::Crypto)
 endif()
 
 add_executable(keepassxc-sync-server src/main.cpp)
