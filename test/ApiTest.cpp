@@ -180,10 +180,10 @@ DROGON_TEST(UnknownRoutesReturnJson404)
     CHECK(json(resp)["error"].asString() == "Not found.");
 }
 
-DROGON_TEST(LegacyModeHasNoAccountRoutes)
+DROGON_TEST(StandaloneModeHasNoAccountRoutes)
 {
-    // SYNC_AUTH_MODE defaults to legacy: no vaults, no internal/notify (even with SYNC_INTERNAL_TOKEN set)
-    CHECK(g_config.authMode == syncserver::AuthMode::Legacy);
+    // SYNC_AUTH_MODE defaults to standalone: no vaults, no internal/notify (even with SYNC_INTERNAL_TOKEN set)
+    CHECK(g_config.authMode == syncserver::AuthMode::Standalone);
     for (const auto& path : {std::string("/vaults"),
                              std::string("/vaults/3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b"),
                              std::string("/vaults/3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b/history")}) {
@@ -203,6 +203,18 @@ DROGON_TEST(LegacyModeHasNoAccountRoutes)
     CHECK(postJson("/internal/notify", notify, "internal-secret")->statusCode() == k404NotFound);
     // A JWT is just an unknown token
     CHECK(request(Get, "/databases", {"eyJhbGciOiJFZERTQSJ9.e30.c2ln"})->statusCode() == k401Unauthorized);
+}
+
+DROGON_TEST(AuthModeAcceptsItsOldName)
+{
+    // Servers configured before the rename keep starting
+    for (const auto* value : {"standalone", "legacy"}) {
+        setenv("SYNC_AUTH_MODE", value, 1);
+        CHECK(syncserver::Config::fromEnvironment().authMode == syncserver::AuthMode::Standalone);
+    }
+    setenv("SYNC_AUTH_MODE", "selfhosted", 1);
+    CHECK_THROWS(syncserver::Config::fromEnvironment());
+    unsetenv("SYNC_AUTH_MODE");
 }
 
 DROGON_TEST(AnswersCorsForTheHostedWebApp)
@@ -874,7 +886,7 @@ int main(int argc, char** argv)
     config.maxDatabaseBytes = 1024;
     config.historySize = 2;
     config.threads = 4;
-    // Ignored in the default legacy mode, see LegacyModeHasNoAccountRoutes
+    // Ignored in the default standalone mode, see StandaloneModeHasNoAccountRoutes
     config.internalToken = "internal-secret";
     // A self-hosted server reachable from the hosted web app
     config.allowedOrigins = {"https://app.keepassxc.example"};

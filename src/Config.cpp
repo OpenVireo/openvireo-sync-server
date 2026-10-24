@@ -101,14 +101,15 @@ namespace syncserver
             throw std::runtime_error("SYNC_DATABASE_SCHEMA may only contain lower case letters, digits and \"_\"");
         }
         auto mode = stringFromEnv("SYNC_AUTH_MODE");
-        if (mode.empty() || mode == "legacy") {
-            config.authMode = AuthMode::Legacy;
+        // "legacy" is the old name of standalone
+        if (mode.empty() || mode == "standalone" || mode == "legacy") {
+            config.authMode = AuthMode::Standalone;
         } else if (mode == "jwt") {
             config.authMode = AuthMode::Jwt;
         } else if (mode == "both") {
             config.authMode = AuthMode::Both;
         } else {
-            throw std::runtime_error("SYNC_AUTH_MODE must be legacy, jwt or both, got \"" + mode + "\"");
+            throw std::runtime_error("SYNC_AUTH_MODE must be standalone, jwt or both, got \"" + mode + "\"");
         }
         config.authJwksUrl = stringFromEnv("SYNC_AUTH_JWKS_URL");
         config.authIssuer = stringFromEnv("SYNC_AUTH_ISSUER");
@@ -151,7 +152,7 @@ namespace syncserver
 
     void Config::validateAuth() const
     {
-        if (authMode == AuthMode::Legacy) {
+        if (authMode == AuthMode::Standalone) {
             return;
         }
         if (authJwksUrl.empty() || authIssuer.empty()) {
