@@ -1,10 +1,11 @@
-# KeePassXC Sync Server
+# OpenVireo Sync Server
 
-A small REST server that stores KeePassXC databases so several devices can stay in sync.
+A small REST server that stores OpenVireo databases so several devices can stay in sync.
 
-The client side lives in [KeePassXC](https://github.com/bongani-m/keepassxc) (`src/gui/remote/`).
+The client side lives in [OpenVireo](https://github.com/openvireo/openvireo) (`src/gui/remote/`). OpenVireo is a fork of
+[KeePassXC](https://keepassxc.org); this server is not part of or endorsed by the KeePassXC project.
 
-The server only ever sees the **encrypted** `.kdbx` file. KeePassXC downloads it, decrypts and merges it locally, then uploads the merged result. Your master password and keys never leave the client.
+The server only ever sees the **encrypted** `.kdbx` file. OpenVireo downloads it, decrypts and merges it locally, then uploads the merged result. Your master password and keys never leave the client.
 
 ## Quick start
 
@@ -14,14 +15,14 @@ The server is written in C++17 on [Drogon](https://github.com/drogonframework/dr
 brew install drogon sqlite     # or: apt install libdrogon-dev libsqlite3-dev, vcpkg install drogon sqlite3, …
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/keepassxc-sync-server users add alice laptop   # prints laptop's access token, shown only once
-./build/keepassxc-sync-server                   # http://127.0.0.1:8787
+./build/openvireo-sync-server users add alice laptop   # prints laptop's access token, shown only once
+./build/openvireo-sync-server                   # http://127.0.0.1:8787
 ```
 
-Then in KeePassXC:
+Then in OpenVireo:
 
 1. Open your database and go to **Database → Database Settings → Remote Sync**.
-2. Enter a name, set **Type** to *KeePassXC Sync Server*, and fill in:
+2. Enter a name, set **Type** to *OpenVireo Sync Server*, and fill in:
    - **Server URL**: `http://127.0.0.1:8787`, or your `https://` URL
    - **Database ID**: any name, e.g. `personal`
    - **Access token**: the token printed for this device. It is kept on this device only (in the Keychain on
@@ -31,7 +32,7 @@ Then in KeePassXC:
 
 The first sync uploads your local database. Later syncs download the server copy, merge it with your local database (the same merge as *Merge from Database*), save it locally, and upload the result.
 
-Other devices use the same Database ID. If a device's copy uses a different password or key file, KeePassXC asks you to unlock the server copy before merging.
+Other devices use the same Database ID. If a device's copy uses a different password or key file, OpenVireo asks you to unlock the server copy before merging.
 
 ### Setting up another device
 
@@ -40,16 +41,16 @@ way to give the new device one is a pairing code: on a device that already syncs
 database settings, select the sync server and click **Pair Device…**. Or on the server:
 
 ```sh
-./build/keepassxc-sync-server devices pair alice   # prints a code such as WJDA-247W
+./build/openvireo-sync-server devices pair alice   # prints a code such as WJDA-247W
 ```
 
-On the new device, enter the code where KeePassXC asks for the access token. It trades the code for a token of its
+On the new device, enter the code where OpenVireo asks for the access token. It trades the code for a token of its
 own, named after the computer. A code adds one device and works for 10 minutes. If you'd rather copy a token by hand,
 `devices add alice phone` prints one.
 
 To get the database onto a new device:
 
-1. Use **Database → Import…** and choose *KeePassXC Sync Server (.kdbx)*.
+1. Use **Database → Import…** and choose *OpenVireo Sync Server (.kdbx)*.
 2. Enter the server URL and a pairing code (or the new device's access token), then click **Load** to pick a database,
    or type its ID.
 3. Enter the database's password and/or key file.
@@ -101,20 +102,20 @@ Setting `SYNC_DATABASE_URL` picks the second; it then needs all of these:
 | `SYNC_S3_ENDPOINT` | e.g. `https://nyc3.digitaloceanspaces.com` |
 | `SYNC_S3_REGION` | e.g. `nyc3` |
 | `SYNC_S3_BUCKET` | Bucket name |
-| `SYNC_S3_PREFIX` | Optional key prefix, so several servers can share a bucket, e.g. `keepassxc/` |
+| `SYNC_S3_PREFIX` | Optional key prefix, so several servers can share a bucket, e.g. `openvireo/` |
 | `SYNC_S3_ACCESS_KEY`, `SYNC_S3_SECRET_KEY` | Access key for the bucket |
 | `SYNC_S3_PATH_STYLE` | `1` for `endpoint/bucket/key` URLs instead of `bucket.endpoint/key` (MinIO, Versity Gateway, …) |
 
 The server creates and upgrades its tables when it starts (instances starting together take turns), or run
-`keepassxc-sync-server migrate`. Every few hours one instance deletes files in the bucket that no version
-refers to any more, left behind by uploads that lost a race or crashed; `keepassxc-sync-server sweep` does it
+`openvireo-sync-server migrate`. Every few hours one instance deletes files in the bucket that no version
+refers to any more, left behind by uploads that lost a race or crashed; `openvireo-sync-server sweep` does it
 at once.
 
 The `users` and `devices` commands work on whichever storage is configured. With Postgres you can run them
 from any machine or one-off container with the same settings, and the running instances see the change at
 once.
 
-To move from a data directory to Postgres, run `keepassxc-sync-server import <data-dir>` with the Postgres
+To move from a data directory to Postgres, run `openvireo-sync-server import <data-dir>` with the Postgres
 settings. It copies users, devices (old per-user tokens included), databases and their kept versions, keeping
 revisions and ETags, so devices carry on syncing without noticing. It leaves users and databases that already
 exist alone and says so.
@@ -152,7 +153,7 @@ bucket. Create the bucket and a Spaces access key first, fill in the placeholder
 doctl apps create --spec .do/app.yaml
 ```
 
-App Platform terminates HTTPS. Add users from the app's console (`keepassxc-sync-server users add alice
+App Platform terminates HTTPS. Add users from the app's console (`openvireo-sync-server users add alice
 laptop`) or from any machine with the same `SYNC_*` settings.
 
 ### Deploying beyond localhost
@@ -165,19 +166,19 @@ sync.example.com {
 }
 ```
 
-KeePassXC does not follow redirects, so the token is never forwarded to another host. Enter the final `https://` URL.
+OpenVireo does not follow redirects, so the token is never forwarded to another host. Enter the final `https://` URL.
 
 ## Users and devices
 
 ```sh
-./build/keepassxc-sync-server users add <name> [device-name]     # create a user with a first device
-./build/keepassxc-sync-server users remove <name>
-./build/keepassxc-sync-server users list
+./build/openvireo-sync-server users add <name> [device-name]     # create a user with a first device
+./build/openvireo-sync-server users remove <name>
+./build/openvireo-sync-server users list
 
-./build/keepassxc-sync-server devices add <user> <device-name>   # a new device and its access token
-./build/keepassxc-sync-server devices pair <user>                # a one-time code a new device trades for a token
-./build/keepassxc-sync-server devices list <user>                # ids, names, when each was last seen
-./build/keepassxc-sync-server devices revoke <user> <device-id>  # its token stops working at once
+./build/openvireo-sync-server devices add <user> <device-name>   # a new device and its access token
+./build/openvireo-sync-server devices pair <user>                # a one-time code a new device trades for a token
+./build/openvireo-sync-server devices list <user>                # ids, names, when each was last seen
+./build/openvireo-sync-server devices revoke <user> <device-id>  # its token stops working at once
 ```
 
 Each user has their own namespace and cannot see other users' databases. All of a user's devices see the same
@@ -190,7 +191,7 @@ database's password, change that password too, so copies uploaded from now on ca
 ### Upgrading from one token per user
 
 Tokens from before devices existed keep working, as a device called `legacy` that all your devices share. Older
-KeePassXC versions also stored that token inside the database. To move to per-device tokens:
+OpenVireo versions also stored that token inside the database. To move to per-device tokens:
 
 1. `devices add <user> <device-name>` for each device, and enter each token in that device's Remote Sync settings.
    Saving the settings also removes the old token from the database.
@@ -231,7 +232,7 @@ Every version has an `ETag`, the quoted SHA-256 of the file. Uploads must say wh
 - `If-Match: "<etag>"` replaces exactly that version. Returns `412` if another device uploaded in the meantime.
 - An upload with neither header is rejected with `428` when the database already exists.
 
-This means two devices can never silently overwrite each other's changes. When KeePassXC gets a `412`, your local changes are already saved. Sync again to merge in the other device's changes.
+This means two devices can never silently overwrite each other's changes. When OpenVireo gets a `412`, your local changes are already saved. Sync again to merge in the other device's changes.
 
 Uploads must start with the KDBX file signature (`415` otherwise). Uploads over the size limit get `413`; that response has no body because the upload is refused before it is read.
 
@@ -240,7 +241,7 @@ Uploads must start with the KDBX file signature (`415` otherwise). Uploads over 
 Before each overwrite, the previous version is copied to `data/databases/<user>/.history/<id>/<revision>.kdbx`, with
 its metadata next to it in `<revision>.json`. The newest `SYNC_HISTORY_SIZE` versions are kept.
 
-In KeePassXC, **Database → Remote Sync → Versions on <name>…** lists them. Opening one downloads it and shows it in
+In OpenVireo, **Database → Remote Sync → Versions on <name>…** lists them. Opening one downloads it and shows it in
 its own tab, where you can copy entries from it or merge it into your database. Nothing on the server changes.
 
 ### Change notifications
@@ -254,7 +255,7 @@ data: {"id":"personal","etag":"\"…\"","revision":12}
 ```
 
 A deleted database sends `{"id":"personal","deleted":true}`. A comment line (`: ping`) every 25 seconds keeps idle
-connections open. KeePassXC listens while automatic sync is on, syncs as soon as another device uploads, and only polls
+connections open. OpenVireo listens while automatic sync is on, syncs as soon as another device uploads, and only polls
 every 5 minutes while it is connected (every minute otherwise). Behind a reverse proxy, make sure it doesn't buffer
 responses (the server sends `X-Accel-Buffering: no` for nginx) and allows long-lived requests.
 
@@ -277,12 +278,12 @@ Chrome's Private Network Access checks: preflights asking for it get `Access-Con
 reverse proxy answers `OPTIONS` itself, let it pass those requests through.
 
 ```sh
-SYNC_ALLOWED_ORIGINS=https://app.example.org ./build/keepassxc-sync-server
+SYNC_ALLOWED_ORIGINS=https://app.example.org ./build/openvireo-sync-server
 ```
 
 ## Accounts (JWT) and vaults
 
-With an account server (`keepassxc-auth`), clients authenticate with short-lived **access tokens** (JWT, signed
+With an account server (`openvireo-auth`), clients authenticate with short-lived **access tokens** (JWT, signed
 with Ed25519) instead of device tokens, and databases become **vaults**: one encrypted `.kdbx` per vault, shared by
 everyone the account server grants access to. This is off unless `SYNC_AUTH_MODE` says otherwise; a self-hosted
 server stays exactly as described above.
@@ -299,8 +300,8 @@ vault route, gets `403`.
 | Variable | Default | Meaning |
 |---|---|---|
 | `SYNC_AUTH_JWKS_URL` | *(required for `jwt`/`both`)* | The account server's `/.well-known/jwks.json` |
-| `SYNC_AUTH_ISSUER` | *(required for `jwt`/`both`)* | Its issuer URL, the tokens' `iss` (as in its `/.well-known/kpx-configuration`) |
-| `SYNC_AUTH_AUDIENCE` | `kpx-sync` | The audience every token's `aud` must contain |
+| `SYNC_AUTH_ISSUER` | *(required for `jwt`/`both`)* | Its issuer URL, the tokens' `iss` (as in its `/.well-known/openvireo-configuration`) |
+| `SYNC_AUTH_AUDIENCE` | `ov-sync` | The audience every token's `aud` must contain |
 | `SYNC_INTERNAL_TOKEN` | *(none)* | Shared secret the account server uses for `POST /api/v1/internal/notify`. Unset: that route is off (`404`) |
 
 The server accepts only `EdDSA` tokens and checks the signature, `iss`, `aud`, `exp` and `nbf` (with 60 seconds of
@@ -316,7 +317,7 @@ SYNC_AUTH_JWKS_URL=https://accounts.example.org/.well-known/jwks.json \
 SYNC_AUTH_ISSUER=https://accounts.example.org \
 SYNC_INTERNAL_TOKEN=<random secret shared with the account server> \
 SYNC_ALLOWED_ORIGINS=https://app.example.org \
-./build/keepassxc-sync-server
+./build/openvireo-sync-server
 ```
 
 ### Vault routes
@@ -371,7 +372,7 @@ To turn a user's database into a vault (for a user moving from a device token to
 from the account server and run
 
 ```sh
-./build/keepassxc-sync-server migrate-to-vaults <user> <database-id> <vault-uuid>
+./build/openvireo-sync-server migrate-to-vaults <user> <database-id> <vault-uuid>
 ```
 
 It copies the database with its kept versions, revisions and ETags to `vaults/<vault-uuid>` and then deletes the
@@ -386,5 +387,5 @@ cmake --build build && ctest --test-dir build --output-on-failure
 ```
 
 `sync_server_test` covers the legacy API, `sync_server_jwt_test` and `sync_server_jwt_only_test` the account side in
-`both` and `jwt` mode, against the shared test vectors in `test/vectors/test-vectors.json` (a copy of KeePassXC's
+`both` and `jwt` mode, against the shared test vectors in `test/vectors/test-vectors.json` (a copy of OpenVireo's
 `docs/plans/accounts/test-vectors.json`).

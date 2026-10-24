@@ -152,7 +152,7 @@ namespace syncserver
 
     /**
      * Opaque database blobs with their metadata and a bounded history of previous versions. The
-     * server never decrypts anything; KeePassXC uploads the already-encrypted .kdbx file.
+     * server never decrypts anything; OpenVireo uploads the already-encrypted .kdbx file.
      */
     class DatabaseRepository
     {

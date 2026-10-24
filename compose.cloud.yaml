@@ -14,13 +14,13 @@
 #
 # The server is on http://127.0.0.1:8787. The credentials below are for local use only.
 
-name: keepassxc-sync-cloud
+name: openvireo-sync-cloud
 
 x-sync-environment: &sync-environment
   SYNC_DATABASE_URL: postgresql://sync:sync@postgres:5432/sync
   SYNC_S3_ENDPOINT: http://s3:7070
   SYNC_S3_REGION: us-east-1
-  SYNC_S3_BUCKET: keepassxc-sync
+  SYNC_S3_BUCKET: openvireo-sync
   SYNC_S3_ACCESS_KEY: local-access-key
   SYNC_S3_SECRET_KEY: local-secret-key
   SYNC_S3_PATH_STYLE: "1"
@@ -48,7 +48,7 @@ services:
     entrypoint:
       - /bin/sh
       - -c
-      - mkdir -p /gw/keepassxc-sync && exec versitygw --access local-access-key --secret local-secret-key --port :7070 posix /gw
+      - mkdir -p /gw/openvireo-sync && exec versitygw --access local-access-key --secret local-secret-key --port :7070 posix /gw
     volumes:
       - s3:/gw
 
@@ -57,7 +57,7 @@ services:
     build:
       context: .
       target: runtime
-    image: keepassxc-sync-server
+    image: openvireo-sync-server
     command: ["migrate"]
     environment: *sync-environment
     depends_on:
@@ -69,7 +69,7 @@ services:
     build:
       context: .
       target: runtime
-    image: keepassxc-sync-server
+    image: openvireo-sync-server
     restart: unless-stopped
     deploy:
       replicas: 2
@@ -99,7 +99,7 @@ services:
     build:
       context: .
       target: test
-    image: keepassxc-sync-server-test
+    image: openvireo-sync-server-test
     environment: *sync-environment
     depends_on:
       postgres:

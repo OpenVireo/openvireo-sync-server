@@ -74,7 +74,7 @@ namespace syncserver
             }
             auto resp = jsonResponse(status, body);
             if (status == k401Unauthorized) {
-                resp->addHeader("WWW-Authenticate", "Bearer realm=\"keepassxc-sync\"");
+                resp->addHeader("WWW-Authenticate", "Bearer realm=\"openvireo-sync\"");
             }
             resp->addHeader("Cache-Control", "no-store");
             return resp;

@@ -106,7 +106,7 @@ namespace syncserver
         : m_url(config.databaseUrl)
         , m_schema(config.databaseSchema)
         , m_connInfo(withSchema(config.databaseUrl, config.databaseSchema))
-        , m_channel("keepassxc_sync" + (config.databaseSchema.empty() ? std::string() : "_" + config.databaseSchema))
+        , m_channel("openvireo_sync" + (config.databaseSchema.empty() ? std::string() : "_" + config.databaseSchema))
     {
         auto connections = config.databaseConnections;
         if (connections == 0) {
@@ -181,7 +181,7 @@ namespace syncserver
     void Postgres::migrate()
     {
         transaction([&](drogon::orm::Transaction& trans) {
-            trans.execSqlSync("SELECT pg_advisory_xact_lock(hashtext($1))", "keepassxc-sync-migrate:" + m_schema);
+            trans.execSqlSync("SELECT pg_advisory_xact_lock(hashtext($1))", "openvireo-sync-migrate:" + m_schema);
             // Checked first rather than with IF NOT EXISTS, which logs a notice on every start
             if (!m_schema.empty()
                 && trans.execSqlSync("SELECT 1 FROM pg_namespace WHERE nspname = $1", m_schema).empty()) {

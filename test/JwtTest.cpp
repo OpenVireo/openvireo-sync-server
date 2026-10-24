@@ -1,6 +1,6 @@
 // The account side of the API: JWT access tokens, vaults, account event streams, internal/notify and CORS,
 // against the shared test vectors of the accounts spec (test/vectors/test-vectors.json, a copy of
-// keepassxc's docs/plans/accounts/test-vectors.json). Built twice: SYNC_AUTH_MODE=both, and with
+// the accounts contract's docs/plans/accounts/test-vectors.json). Built twice: SYNC_AUTH_MODE=both, and with
 // SYNC_TEST_JWT_ONLY for SYNC_AUTH_MODE=jwt. Uses Postgres and S3 when SYNC_DATABASE_URL and SYNC_S3_* are set.
 #define DROGON_TEST_MAIN
 #include <drogon/drogon.h>
@@ -41,9 +41,9 @@ namespace fs = std::filesystem;
 namespace
 {
     const std::string KDBX_HEADER("\x03\xd9\xa2\x9a\x67\xfb\x4b\xb5", 8);
-    const std::string ISSUER = "https://accounts.keepassxc.example";
+    const std::string ISSUER = "https://accounts.openvireo.example";
     const std::string INTERNAL_TOKEN = "internal-shared-secret";
-    const std::string WEB_ORIGIN = "https://app.keepassxc.example";
+    const std::string WEB_ORIGIN = "https://app.openvireo.example";
     // The vaults of the valid vector tokens: the user has manage on the first and read on the second,
     // the service account write on the first
     const std::string VAULT_A = "3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b";
@@ -117,8 +117,8 @@ namespace
     {
         Json::Value claims;
         claims["iss"] = ISSUER;
-        claims["aud"].append("kpx-api");
-        claims["aud"].append("kpx-sync");
+        claims["aud"].append("ov-api");
+        claims["aud"].append("ov-sync");
         claims["sub"] = subject;
         claims["vlt"] = Json::arrayValue;
         for (const auto& [id, role] : vaults) {
@@ -308,7 +308,7 @@ namespace
     {
         return syncserver::JwtVerifier(
             ISSUER,
-            "kpx-sync",
+            "ov-sync",
             [fetches, jwks]() -> std::optional<std::string> {
                 ++*fetches;
                 return *jwks;
@@ -449,7 +449,7 @@ DROGON_TEST(VerifierRejectsMalformedTokens)
     CHECK(!verifier.verify(userToken() + "x").has_value());
     // The audience may also be a plain string
     auto single = claims;
-    single["aud"] = "kpx-sync";
+    single["aud"] = "ov-sync";
     CHECK(verifier.verify(sign(single)).has_value());
     auto noExp = claims;
     noExp.removeMember("exp");
@@ -475,7 +475,7 @@ DROGON_TEST(EveryInvalidVectorGets401)
         auto resp = request(Get, "/vaults", {vector["token"].asString()});
         CHECK(resp->statusCode() == vector["expect"].asInt());
         CHECK(errorCode(resp) == "unauthorized");
-        CHECK(resp->getHeader("WWW-Authenticate") == "Bearer realm=\"keepassxc-sync\"");
+        CHECK(resp->getHeader("WWW-Authenticate") == "Bearer realm=\"openvireo-sync\"");
         CHECK(request(Get, "/vaults/" + VAULT_A, {vector["token"].asString()})->statusCode() == k401Unauthorized);
     }
     CHECK(request(Get, "/vaults")->statusCode() == k401Unauthorized);
@@ -870,7 +870,7 @@ int main(int argc, char** argv)
     g_now = g_vectorNow;
     g_jwks = compact(g_vectors["jwt"]["jwks"]);
 
-    auto dataDir = fs::temp_directory_path() / ("kpxc-sync-jwt-test-" + utils::getUuid());
+    auto dataDir = fs::temp_directory_path() / ("openvireo-sync-jwt-test-" + utils::getUuid());
     fs::create_directories(dataDir);
 
     auto& config = g_config;
