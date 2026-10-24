@@ -27,7 +27,7 @@ namespace syncserver
     enum class AuthMode
     {
         // Device tokens only, the self-hosted setup: databases/*, devices/pairing*, events
-        Legacy,
+        Standalone,
         // Account access tokens (JWT) only: vaults/*, events, internal/notify
         Jwt,
         // Either; a token with two "." is a JWT
@@ -57,7 +57,7 @@ namespace syncserver
         unsigned databaseConnections = 0;
         S3Config s3;
 
-        AuthMode authMode = AuthMode::Legacy;
+        AuthMode authMode = AuthMode::Standalone;
         // The auth server's JWKS, its issuer URL (the tokens' iss) and the audience this server requires
         std::string authJwksUrl;
         std::string authIssuer;
@@ -74,7 +74,7 @@ namespace syncserver
 
         bool acceptsJwt() const
         {
-            return authMode != AuthMode::Legacy;
+            return authMode != AuthMode::Standalone;
         }
 
         bool acceptsDeviceTokens() const

@@ -72,7 +72,7 @@ Set these as environment variables:
 | `SYNC_THREADS` | `0` | Number of I/O threads, `0` means one per CPU core |
 | `SYNC_BEHIND_PROXY` | `0` | `1` silences the warning about listening on a non-loopback address, when TLS is terminated in front of the server |
 | `SYNC_ALLOWED_ORIGINS` | *(none)* | Comma-separated web origins allowed to call the API from a browser (CORS), e.g. `https://app.example.org`; `*` allows any. See [Web apps](#web-apps-cors) |
-| `SYNC_AUTH_MODE` | `legacy` | Which tokens the server accepts: `legacy`, `jwt` or `both`. See [Accounts](#accounts-jwt-and-vaults) |
+| `SYNC_AUTH_MODE` | `standalone` | Which tokens the server accepts: `standalone`, `jwt` or `both` (`legacy` is an old name for `standalone`). See [Accounts](#accounts-jwt-and-vaults) |
 
 The account variables (`SYNC_AUTH_JWKS_URL`, `SYNC_AUTH_ISSUER`, `SYNC_AUTH_AUDIENCE`, `SYNC_INTERNAL_TOKEN`) are
 described under [Accounts](#accounts-jwt-and-vaults). A self-hosted server needs none of them.
@@ -269,7 +269,7 @@ the `Authorization` header, never in cookies, so credentials mode is not used. W
 the server sends no CORS headers at all.
 
 **Using a self-hosted server from the hosted web app:** set `SYNC_ALLOWED_ORIGINS` to the origin the web app is
-served from (the address in the browser's address bar, scheme and host only), keep `SYNC_AUTH_MODE` at `legacy`, and
+served from (the address in the browser's address bar, scheme and host only), keep `SYNC_AUTH_MODE` at `standalone`, and
 pick *Use my own sync server* in the web app with your server's URL and a pairing code. The server must be reachable
 over **HTTPS** (see [Deploying beyond localhost](#deploying-beyond-localhost)): a page served over HTTPS can't call a
 plain `http://` server, except one on `localhost`. A server on `localhost` or the local network also works with
@@ -289,7 +289,7 @@ server stays exactly as described above.
 
 | `SYNC_AUTH_MODE` | Accepted tokens | Routes |
 |---|---|---|
-| `legacy` (default) | device tokens | `databases/*`, `devices/pairing*`, `events` |
+| `standalone` (default) | device tokens | `databases/*`, `devices/pairing*`, `events` |
 | `jwt` | access tokens | `vaults`, `vaults/*`, `events`, `internal/notify` |
 | `both` | either; a token with two `.` is an access token | all of the above |
 

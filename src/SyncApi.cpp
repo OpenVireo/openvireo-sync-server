@@ -860,7 +860,7 @@ namespace syncserver
             },
             {Get});
 
-        // Device tokens: the self-hosted setup (SYNC_AUTH_MODE legacy or both)
+        // Device tokens: the self-hosted setup (SYNC_AUTH_MODE standalone or both)
         if (config.acceptsDeviceTokens()) {
             app.registerHandler("/api/v1/databases",
                                 [api](const HttpRequestPtr& req, Callback&& callback) {
@@ -888,7 +888,7 @@ namespace syncserver
                                         {Get, Put, Delete});
         }
 
-        // Account access tokens (SYNC_AUTH_MODE jwt or both); in legacy mode these routes don't exist (404)
+        // Account access tokens (SYNC_AUTH_MODE jwt or both); in standalone mode these routes don't exist (404)
         if (config.acceptsJwt()) {
             app.registerHandler("/api/v1/vaults",
                                 [api](const HttpRequestPtr& req, Callback&& callback) {
