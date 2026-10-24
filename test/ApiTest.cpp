@@ -125,7 +125,7 @@ namespace
         if (g_config.usesPostgres()) {
             return syncserver::openStorage(g_config).users;
         }
-        auto path = fs::temp_directory_path() / ("kpxc-sync-users-" + utils::getUuid());
+        auto path = fs::temp_directory_path() / ("openvireo-sync-users-" + utils::getUuid());
         fs::create_directories(path);
         if (dir) {
             *dir = path;
@@ -163,7 +163,7 @@ DROGON_TEST(RejectsMissingAndInvalidTokens)
 {
     auto missing = request(Get, "/databases", {""});
     CHECK(missing->statusCode() == k401Unauthorized);
-    CHECK(missing->getHeader("WWW-Authenticate") == "Bearer realm=\"keepassxc-sync\"");
+    CHECK(missing->getHeader("WWW-Authenticate") == "Bearer realm=\"openvireo-sync\"");
     CHECK(request(Get, "/databases", {"nope"})->statusCode() == k401Unauthorized);
 }
 
@@ -223,24 +223,24 @@ DROGON_TEST(AnswersCorsForTheHostedWebApp)
     auto preflight = HttpRequest::newHttpRequest();
     preflight->setMethod(Options);
     preflight->setPath("/api/v1/databases/main");
-    preflight->addHeader("Origin", "https://app.keepassxc.example");
+    preflight->addHeader("Origin", "https://app.openvireo.example");
     preflight->addHeader("Access-Control-Request-Method", "PUT");
     preflight->addHeader("Access-Control-Request-Private-Network", "true");
     auto allowed = client->sendRequest(preflight, 10).second;
     REQUIRE(allowed);
     CHECK(allowed->statusCode() == k204NoContent);
     CHECK(allowed->getHeader("Access-Control-Allow-Private-Network") == "true");
-    CHECK(allowed->getHeader("Access-Control-Allow-Origin") == "https://app.keepassxc.example");
+    CHECK(allowed->getHeader("Access-Control-Allow-Origin") == "https://app.openvireo.example");
     CHECK(allowed->getHeader("Access-Control-Allow-Headers") == "Authorization, Content-Type, If-Match, If-None-Match");
 
     auto list = HttpRequest::newHttpRequest();
     list->setPath("/api/v1/databases");
-    list->addHeader("Origin", "https://app.keepassxc.example");
+    list->addHeader("Origin", "https://app.openvireo.example");
     list->addHeader("Authorization", "Bearer " + g_aliceToken);
     auto resp = client->sendRequest(list, 10).second;
     REQUIRE(resp);
     CHECK(resp->statusCode() == k200OK);
-    CHECK(resp->getHeader("Access-Control-Allow-Origin") == "https://app.keepassxc.example");
+    CHECK(resp->getHeader("Access-Control-Allow-Origin") == "https://app.openvireo.example");
     CHECK(resp->getHeader("Access-Control-Expose-Headers") == "ETag, X-Database-Revision, Last-Modified");
 
     // Other origins get no CORS headers
@@ -441,7 +441,7 @@ DROGON_TEST(ListsDevicesAndWhenTheyWereLastSeen)
 
 DROGON_TEST(ImportsUsersJsonFromOlderServers)
 {
-    auto dir = fs::temp_directory_path() / ("kpxc-sync-users-" + utils::getUuid());
+    auto dir = fs::temp_directory_path() / ("openvireo-sync-users-" + utils::getUuid());
     fs::create_directories(dir);
     const std::string oldToken = "token-from-an-older-server";
     Json::Value data;
@@ -829,7 +829,7 @@ DROGON_TEST(ImportsADataDirectoryUnchanged)
     if (!g_config.usesPostgres()) {
         return;
     }
-    auto dir = fs::temp_directory_path() / ("kpxc-sync-import-" + utils::getUuid());
+    auto dir = fs::temp_directory_path() / ("openvireo-sync-import-" + utils::getUuid());
     fs::create_directories(dir);
     const std::string legacyToken = "token-from-an-older-server";
     {
@@ -870,7 +870,7 @@ DROGON_TEST(ImportsADataDirectoryUnchanged)
 
 int main(int argc, char** argv)
 {
-    g_dataDir = fs::temp_directory_path() / ("kpxc-sync-test-" + utils::getUuid());
+    g_dataDir = fs::temp_directory_path() / ("openvireo-sync-test-" + utils::getUuid());
     fs::create_directories(g_dataDir);
 
     auto& config = g_config;
@@ -889,7 +889,7 @@ int main(int argc, char** argv)
     // Ignored in the default standalone mode, see StandaloneModeHasNoAccountRoutes
     config.internalToken = "internal-secret";
     // A self-hosted server reachable from the hosted web app
-    config.allowedOrigins = {"https://app.keepassxc.example"};
+    config.allowedOrigins = {"https://app.openvireo.example"};
     if (config.usesPostgres()) {
         // A schema and key prefix of its own, so runs don't see each other's data
         std::string run;

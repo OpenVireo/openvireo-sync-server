@@ -3,8 +3,8 @@
 # The sync server with both storage backends: the data directory (default, mount a volume on /data) and
 # Postgres plus an S3-compatible bucket (set SYNC_DATABASE_URL and SYNC_S3_*). See README.md.
 #
-#   docker build -t keepassxc-sync-server .
-#   docker build --target test -t keepassxc-sync-server-test .   # the API tests, see compose.cloud.yaml
+#   docker build -t openvireo-sync-server .
+#   docker build --target test -t openvireo-sync-server-test .   # the API tests, see compose.cloud.yaml
 
 ARG DEBIAN_RELEASE=bookworm
 
@@ -46,16 +46,16 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates libbrotli1 libjsoncpp25 libpq5 libsqlite3-0 libssl3 libuuid1 zlib1g \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin keepassxc \
-    && install -d -o keepassxc -g keepassxc -m 0700 /data
-COPY --from=build /out/bin/keepassxc-sync-server /usr/local/bin/keepassxc-sync-server
+    && useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin openvireo \
+    && install -d -o openvireo -g openvireo -m 0700 /data
+COPY --from=build /out/bin/openvireo-sync-server /usr/local/bin/openvireo-sync-server
 
 # Listens on all interfaces inside the container; terminate TLS in front of it
 ENV SYNC_HOST=0.0.0.0 \
     SYNC_PORT=8787 \
     SYNC_DATA_DIR=/data
-USER keepassxc
+USER openvireo
 WORKDIR /data
 VOLUME ["/data"]
 EXPOSE 8787
-ENTRYPOINT ["keepassxc-sync-server"]
+ENTRYPOINT ["openvireo-sync-server"]

@@ -61,7 +61,7 @@ namespace syncserver
         // The auth server's JWKS, its issuer URL (the tokens' iss) and the audience this server requires
         std::string authJwksUrl;
         std::string authIssuer;
-        std::string authAudience = "kpx-sync";
+        std::string authAudience = "ov-sync";
         // Shared secret of the auth server for POST /internal/notify; the route is off when empty
         std::string internalToken;
         // Web origins allowed to call the API from a browser (CORS), e.g. https://app.example.org; "*" for any

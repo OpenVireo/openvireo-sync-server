@@ -8,9 +8,9 @@
 #   - set cluster_name to your managed Postgres cluster (or remove `production` and `cluster_name` for a
 #     development database).
 # The instances apply the schema when they start, under a lock, so no pre-deploy job is needed. Add users
-# from the app's console: keepassxc-sync-server users add alice laptop
+# from the app's console: openvireo-sync-server users add alice laptop
 
-name: keepassxc-sync
+name: openvireo-sync
 region: nyc
 
 services:
@@ -20,10 +20,10 @@ services:
     #   image:
     #     registry_type: GHCR
     #     registry: <owner>
-    #     repository: keepassxc-sync-server
+    #     repository: openvireo-sync-server
     #     tag: latest
     github:
-      repo: <owner>/keepassxc-sync-server
+      repo: <owner>/openvireo-sync-server
       branch: main
       deploy_on_push: true
     dockerfile_path: Dockerfile

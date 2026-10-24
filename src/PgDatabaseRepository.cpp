@@ -396,7 +396,7 @@ namespace syncserver
     std::optional<std::size_t> PgDatabaseRepository::sweep(std::chrono::seconds minAge)
     {
         std::size_t removed = 0;
-        bool ran = m_pg->withTryLock("keepassxc-sync-sweep", [&](Transaction& trans) {
+        bool ran = m_pg->withTryLock("openvireo-sync-sweep", [&](Transaction& trans) {
             // Listed before reading the rows: a blob uploaded after the listing isn't in it, and one committed
             // before the query is in the rows
             auto objects = m_blobs->list();

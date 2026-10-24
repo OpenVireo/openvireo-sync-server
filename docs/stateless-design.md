@@ -1,6 +1,6 @@
 # Stateless Sync Server — Plan
 
-**Status:** Implemented (in KeePassXC's `feature/auto-sync`, before the server moved to this repository), except as noted in 7
+**Status:** Implemented (in OpenVireo's `feature/auto-sync`, before the server moved to this repository), except as noted in 7
 **Branch target:** `develop`
 **Last updated:** 2026-10-16
 
@@ -13,7 +13,7 @@ Deploys use prebuilt images published from GitHub, so nothing is compiled at dep
 The guarantees stay the same: the server only stores encrypted `.kdbx` files and never decrypts them, conditional
 uploads let exactly one of two simultaneous writers win, and a bounded history of previous versions is kept.
 
-The filesystem mode stays as the default for self-hosting and development. The HTTP API doesn't change, so KeePassXC
+The filesystem mode stays as the default for self-hosting and development. The HTTP API doesn't change, so OpenVireo
 needs no changes.
 
 ### Why stay in C++
@@ -210,11 +210,11 @@ filesystem mode; Postgres and S3 support are compiled in only when their depende
 
 | Image | Built from | When |
 |---|---|---|
-| `keepassxc-sync-server-builder` | `docker/Dockerfile.builder`: Debian, compiler, CMake, vcpkg, and the manifest's dependencies already built | When `vcpkg.json` or `Dockerfile.builder` changes |
-| `keepassxc-sync-server` | `Dockerfile`: compiles the server on the builder image, copies the binary into a slim Debian runtime image, runs as a non-root user with `SYNC_HOST=0.0.0.0` and `SYNC_DATA_DIR=/data` | On every push to `develop` (tag `edge`) and on `sync-server-v*` tags (version tags and `latest`) |
+| `openvireo-sync-server-builder` | `docker/Dockerfile.builder`: Debian, compiler, CMake, vcpkg, and the manifest's dependencies already built | When `vcpkg.json` or `Dockerfile.builder` changes |
+| `openvireo-sync-server` | `Dockerfile`: compiles the server on the builder image, copies the binary into a slim Debian runtime image, runs as a non-root user with `SYNC_HOST=0.0.0.0` and `SYNC_DATA_DIR=/data` | On every push to `develop` (tag `edge`) and on `sync-server-v*` tags (version tags and `latest`) |
 
 The vcpkg Linux triplets build static libraries, so the server binary only needs glibc. Each `sync-server-v*` tag
-also attaches `keepassxc-sync-server-<version>-linux-<arch>.tar.gz` to a GitHub release, for running without Docker.
+also attaches `openvireo-sync-server-<version>-linux-<arch>.tar.gz` to a GitHub release, for running without Docker.
 
 **The default** is to deploy the published image: App Platform pulls it and builds nothing. If App Platform can't pull
 from GHCR, the workflow also pushes to DigitalOcean Container Registry.
@@ -266,7 +266,7 @@ Each phase is one PR. Phases 1 and 2 change no behaviour.
   - history pruning deletes the right blobs and never one that a row still references;
   - the sweep deletes an unreferenced old blob and keeps a new one;
   - `import` of a data directory with history and a legacy token, after which existing clients' ETags still match.
-- KeePassXC's `tests/TestRemoteSyncServer.cpp` and `tests/gui/TestGuiAutoSync.cpp` run unchanged against a server started from
+- OpenVireo's `tests/TestRemoteSyncServer.cpp` and `tests/gui/TestGuiAutoSync.cpp` run unchanged against a server started from
   the published image, in both modes.
 
 ## 6. Follow-ups, not in scope
@@ -274,7 +274,7 @@ Each phase is one PR. Phases 1 and 2 change no behaviour.
 - A shared, table-backed rate limit for pairing claims across instances.
 - Streaming uploads and downloads to and from the bucket instead of holding each blob in memory (already true today,
   bounded by `SYNC_MAX_DB_BYTES`).
-- Answering `GET` with a short-lived presigned URL instead of proxying the blob. KeePassXC would have to follow the
+- Answering `GET` with a short-lived presigned URL instead of proxying the blob. OpenVireo would have to follow the
   redirect without sending its token to the bucket.
 - macOS and Windows release archives.
 - **Scaling events beyond `LISTEN/NOTIFY`.** Postgres only sees one listener per instance, and there is one

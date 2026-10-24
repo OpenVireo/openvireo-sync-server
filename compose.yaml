@@ -13,7 +13,7 @@ services:
     build:
       context: .
       target: runtime
-    image: keepassxc-sync-server
+    image: openvireo-sync-server
     restart: unless-stopped
     ports:
       # SYNC_HOST_PORT picks another port on the host

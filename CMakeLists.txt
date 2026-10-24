@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(keepassxc-sync-server LANGUAGES CXX)
+project(openvireo-sync-server LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,8 +60,8 @@ if(WITH_CLOUD)
     target_compile_definitions(sync_server_core PUBLIC SYNC_SERVER_WITH_CLOUD)
 endif()
 
-add_executable(keepassxc-sync-server src/main.cpp)
-target_link_libraries(keepassxc-sync-server PRIVATE sync_server_core)
+add_executable(openvireo-sync-server src/main.cpp)
+target_link_libraries(openvireo-sync-server PRIVATE sync_server_core)
 
 option(BUILD_TESTING "Build the API tests" ON)
 if(BUILD_TESTING)
@@ -84,4 +84,4 @@ if(BUILD_TESTING)
     add_test(NAME sync_server_jwt_only_test COMMAND sync_server_jwt_only_test)
 endif()
 
-install(TARGETS keepassxc-sync-server RUNTIME DESTINATION bin)
+install(TARGETS openvireo-sync-server RUNTIME DESTINATION bin)

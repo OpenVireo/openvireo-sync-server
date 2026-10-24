@@ -17,7 +17,7 @@
 namespace
 {
     constexpr const char* USAGE =
-        R"(Usage: keepassxc-sync-server [users|devices <command> ... | migrate | import <data-dir> | sweep |
+        R"(Usage: openvireo-sync-server [users|devices <command> ... | migrate | import <data-dir> | sweep |
                              migrate-to-vaults <user> <database-id> <vault-uuid>]
 
 Without arguments, runs the sync server.
@@ -29,7 +29,7 @@ User commands:
 
 Device commands (each device has its own access token):
   devices add <user> <device-name>   Add a device and print its access token
-  devices pair <user>                Print a one-time code that adds a device when entered in KeePassXC
+  devices pair <user>                Print a one-time code that adds a device when entered in OpenVireo
                                      instead of a token (valid for 10 minutes)
   devices list <user>                List a user's devices
   devices revoke <user> <device-id>  Revoke a device; its token stops working at once
@@ -53,7 +53,7 @@ SYNC_DATA_DIR (default: ./data).)";
     void printToken(const std::string& user, const std::string& device, const std::string& token)
     {
         std::cout << "Access token for \"" << device << "\" of \"" << user
-                  << "\" (shown only once, enter it in KeePassXC on that device):\n\n  " << token << "\n\n";
+                  << "\" (shown only once, enter it in OpenVireo on that device):\n\n  " << token << "\n\n";
     }
 
     int manageUsers(syncserver::UserRepository& users, const std::vector<std::string>& args)
@@ -96,7 +96,7 @@ SYNC_DATA_DIR (default: ./data).)";
         if (command == "pair" && args.size() == 2) {
             auto pairing = users.createPairingCode(args[1]);
             std::cout << "Pairing code for a new device of \"" << args[1]
-                      << "\" (enter it in KeePassXC instead of an access token):\n\n  " << pairing.code
+                      << "\" (enter it in OpenVireo instead of an access token):\n\n  " << pairing.code
                       << "\n\nIt works once, until " << pairing.expiresAt << ". The running server accepts it.\n";
             return 0;
         }
@@ -213,7 +213,7 @@ int main(int argc, char* argv[])
             .setThreadNum(config.threads)
             .addListener(config.host, config.port)
             .registerBeginningAdvice([config, description] {
-                std::cout << "KeePassXC sync server listening on http://" << config.host << ":" << config.port
+                std::cout << "OpenVireo sync server listening on http://" << config.host << ":" << config.port
                           << "\nStorage: " << description << std::endl;
                 if (!isLoopback(config.host) && !config.behindProxy) {
                     std::cerr << "Warning: listening on a non-loopback address. Put the server behind HTTPS "
