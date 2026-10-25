@@ -295,7 +295,7 @@ server stays exactly as described above.
 | `SYNC_AUTH_MODE` | Accepted tokens | Routes |
 |---|---|---|
 | `standalone` (default) | device tokens | `databases/*`, `devices/pairing*`, `events` |
-| `jwt` | access tokens | `vaults`, `vaults/*`, `events`, `internal/notify` |
+| `jwt` | access tokens | `vaults`, `vaults/*`, `events`, `internal/*` |
 | `both` | either; a token with two `.` is an access token | all of the above |
 
 Routes a mode doesn't have answer `404`. In `both` mode, an access token on a legacy route, or a device token on a
@@ -306,7 +306,7 @@ vault route, gets `403`.
 | `SYNC_AUTH_JWKS_URL` | *(required for `jwt`/`both`)* | The account server's `/.well-known/jwks.json` |
 | `SYNC_AUTH_ISSUER` | *(required for `jwt`/`both`)* | Its issuer URL, the tokens' `iss` (as in its `/.well-known/openvireo-configuration`) |
 | `SYNC_AUTH_AUDIENCE` | `ov-sync` | The audience every token's `aud` must contain |
-| `SYNC_INTERNAL_TOKEN` | *(none)* | Shared secret the account server uses for `POST /api/v1/internal/notify`. Unset: that route is off (`404`) |
+| `SYNC_INTERNAL_TOKEN` | *(none)* | Shared secret the account server uses for `POST /api/v1/internal/notify` and `DELETE /api/v1/internal/vaults/{vault}`. Unset: those routes are off (`404`) |
 
 The server accepts only `EdDSA` tokens and checks the signature, `iss`, `aud`, `exp` and `nbf` (with 60 seconds of
 clock skew). It fetches the JWKS on first use and caches it, fetches it again when a token names a key id it doesn't
@@ -365,6 +365,12 @@ The account server sends `access` events with `POST /api/v1/internal/notify`, `A
 null>, "change": "granted"|"revoked"|"rotating"|"rotated"|"org"}}`, answered with `204`. Delivery is best effort.
 With Postgres the event reaches streams on every instance (through `NOTIFY`).
 
+When no client deletes a vault, e.g. once a recovery archive expires, the account server sends `DELETE
+/api/v1/internal/vaults/{vault}` with the same `Authorization: Bearer <SYNC_INTERNAL_TOKEN>`. It deletes the vault and
+its history exactly as a `DELETE /api/v1/vaults/{vault}` with manage would, and the vault's streams get `{"id":
+"<vault>", "deleted": true}`. It answers `204`, `404` (`not_found`) when there is no such vault, and `400` for an id
+that isn't a lowercase UUID. An access or device token is never enough (`401`).
+
 ### Storage of vaults
 
 Vaults never share a storage key with a user's databases: in the data directory they live in `vaults/<uuid>.kdbx`
@@ -391,5 +397,5 @@ cmake --build build && ctest --test-dir build --output-on-failure
 ```
 
 `sync_server_test` covers the legacy API, `sync_server_jwt_test` and `sync_server_jwt_only_test` the account side in
-`both` and `jwt` mode, against the shared test vectors in `test/vectors/test-vectors.json` (a copy of OpenVireo's
-`docs/plans/accounts/test-vectors.json`).
+`both` and `jwt` mode, and `sync_server_jwt_no_internal_test` `both` mode without `SYNC_INTERNAL_TOKEN`, against the
+shared test vectors in `test/vectors/test-vectors.json` (a copy of OpenVireo's `docs/plans/accounts/test-vectors.json`).
