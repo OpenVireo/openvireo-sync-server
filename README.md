@@ -140,6 +140,10 @@ docker compose -f compose.cloud.yaml run --rm migrate users add alice laptop
 docker compose -f compose.cloud.yaml run --rm --build test    # the API tests against Postgres and the bucket
 ```
 
+Released images for linux/amd64 and linux/arm64 are on GHCR as `ghcr.io/openvireo/openvireo-sync-server`
+(`:latest`, `:1`, `:1.2`, `:1.2.3`). Pushing a `v1.2.3` tag runs the tests and publishes them
+(`.github/workflows/release.yml`).
+
 `SYNC_HOST_PORT=18787` publishes either on another port. The image runs as an unprivileged user (uid 10001),
 listens on `0.0.0.0:8787` and keeps the data directory in `/data`; a bind-mounted directory must be writable
 by that uid.
