@@ -705,10 +705,7 @@ namespace syncserver
              */
             HttpResponsePtr notify(const HttpRequestPtr& req)
             {
-                auto token = bearerToken(req);
-                if (!token || !constantTimeEquals(sha256Hex(*token), sha256Hex(m_internalToken))) {
-                    throw HttpError(k401Unauthorized, "Missing or invalid internal token.");
-                }
+                authenticateInternal(req);
                 auto json = req->getJsonObject();
                 if (!json || !json->isObject() || !(*json)["subjects"].isArray() || (*json)["event"] != "access"
                     || !(*json)["data"].isObject()) {
@@ -747,7 +744,31 @@ namespace syncserver
                 return HttpResponse::newHttpResponse(k204NoContent, CT_NONE);
             }
 
+            /**
+             * DELETE /api/v1/internal/vaults/{uuid} from the auth server (SPEC.md §18), authenticated with
+             * SYNC_INTERNAL_TOKEN: deletes a vault blob and its history when no client does it, e.g. an expired
+             * recovery archive. Like a JWT DELETE /vaults/{uuid}, the vault's streams get "deleted": true.
+             */
+            HttpResponsePtr deleteVault(const HttpRequestPtr& req, const std::string& id)
+            {
+                authenticateInternal(req);
+                if (!isUuid(id)) {
+                    throw HttpError(k400BadRequest, "Invalid vault id (expected a lowercase UUID).");
+                }
+                return remove(req, m_vaults, VaultScope, id, "Vault");
+            }
+
         private:
+            // The internal routes take only the auth server's SYNC_INTERNAL_TOKEN, never an account or device token
+            void authenticateInternal(const HttpRequestPtr& req) const
+            {
+                auto token = bearerToken(req);
+                if (!token || !constantTimeEquals(sha256Hex(*token), sha256Hex(m_internalToken))) {
+                    throw HttpError(k401Unauthorized, "Missing or invalid internal token.");
+                }
+            }
+
+
             // Codes have 40 bits; ten wrong guesses per address and a hundred in all per ten
             // minutes leave no time to find one before it expires
             FailureLimiter m_pairingFailures{10, 100, std::chrono::minutes(10)};
@@ -908,6 +929,13 @@ namespace syncserver
                                         respond(callback, [&] { return api->notify(req); }, true);
                                     },
                                     {Post});
+
+                app.registerHandlerViaRegex(
+                    "/api/v1/internal/vaults/(.+)",
+                    [api](const HttpRequestPtr& req, Callback&& callback, const std::string& id) {
+                        respond(callback, [&] { return api->deleteVault(req, id); }, true);
+                    },
+                    {Delete});
             }
 
             // Account streams end when their token expires

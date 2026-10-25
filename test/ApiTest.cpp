@@ -182,7 +182,7 @@ DROGON_TEST(UnknownRoutesReturnJson404)
 
 DROGON_TEST(StandaloneModeHasNoAccountRoutes)
 {
-    // SYNC_AUTH_MODE defaults to standalone: no vaults, no internal/notify (even with SYNC_INTERNAL_TOKEN set)
+    // SYNC_AUTH_MODE defaults to standalone: no vaults, no internal/* routes (even with SYNC_INTERNAL_TOKEN set)
     CHECK(g_config.authMode == syncserver::AuthMode::Standalone);
     for (const auto& path : {std::string("/vaults"),
                              std::string("/vaults/3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b"),
@@ -201,6 +201,8 @@ DROGON_TEST(StandaloneModeHasNoAccountRoutes)
     notify["event"] = "access";
     notify["data"]["change"] = "granted";
     CHECK(postJson("/internal/notify", notify, "internal-secret")->statusCode() == k404NotFound);
+    CHECK(request(Delete, "/internal/vaults/3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b", {"internal-secret"})->statusCode()
+          == k404NotFound);
     // A JWT is just an unknown token
     CHECK(request(Get, "/databases", {"eyJhbGciOiJFZERTQSJ9.e30.c2ln"})->statusCode() == k401Unauthorized);
 }

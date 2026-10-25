@@ -82,6 +82,13 @@ if(BUILD_TESTING)
     target_compile_definitions(sync_server_jwt_only_test PRIVATE SYNC_TEST_VECTORS="${SYNC_TEST_VECTORS}"
                                                                   SYNC_TEST_JWT_ONLY)
     add_test(NAME sync_server_jwt_only_test COMMAND sync_server_jwt_only_test)
+
+    # SYNC_AUTH_MODE both without SYNC_INTERNAL_TOKEN: the internal routes are off
+    add_executable(sync_server_jwt_no_internal_test test/JwtTest.cpp)
+    target_link_libraries(sync_server_jwt_no_internal_test PRIVATE sync_server_core)
+    target_compile_definitions(sync_server_jwt_no_internal_test PRIVATE SYNC_TEST_VECTORS="${SYNC_TEST_VECTORS}"
+                                                                        SYNC_TEST_NO_INTERNAL_TOKEN)
+    add_test(NAME sync_server_jwt_no_internal_test COMMAND sync_server_jwt_no_internal_test)
 endif()
 
 install(TARGETS openvireo-sync-server RUNTIME DESTINATION bin)

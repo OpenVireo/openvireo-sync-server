@@ -1,7 +1,8 @@
 // The account side of the API: JWT access tokens, vaults, account event streams, internal/notify and CORS,
 // against the shared test vectors of the accounts spec (test/vectors/test-vectors.json, a copy of
 // the accounts contract's docs/plans/accounts/test-vectors.json). Built twice: SYNC_AUTH_MODE=both, and with
-// SYNC_TEST_JWT_ONLY for SYNC_AUTH_MODE=jwt. Uses Postgres and S3 when SYNC_DATABASE_URL and SYNC_S3_* are set.
+// SYNC_TEST_JWT_ONLY for SYNC_AUTH_MODE=jwt, and a third time with SYNC_TEST_NO_INTERNAL_TOKEN for SYNC_AUTH_MODE=both
+// without SYNC_INTERNAL_TOKEN. Uses Postgres and S3 when SYNC_DATABASE_URL and SYNC_S3_* are set.
 #define DROGON_TEST_MAIN
 #include <drogon/drogon.h>
 #include <drogon/drogon_test.h>
@@ -697,6 +698,7 @@ DROGON_TEST(StreamsOnlyTheTokensVaults)
     CHECK(invalid.waitFor("401"));
 }
 
+#ifndef SYNC_TEST_NO_INTERNAL_TOKEN
 DROGON_TEST(DeliversAccessEventsFromTheAuthServer)
 {
     const std::string alice = "user:11111111-1111-4111-8111-111111111111";
@@ -748,6 +750,87 @@ DROGON_TEST(DeliversAccessEventsFromTheAuthServer)
     CHECK(postJson("/internal/notify", org, INTERNAL_TOKEN)->statusCode() == k204NoContent);
     CHECK(robotStream.waitFor("{\"change\":\"org\",\"vault\":null}"));
 }
+
+DROGON_TEST(DeletesVaultsForTheAuthServer)
+{
+    auto id = newVaultId();
+    auto other = newVaultId();
+    auto etag = createVault(id, "version 1");
+    request(Put, "/vaults/" + id, {accountToken({{id, "write"}}), {{"If-Match", etag}}, fakeDatabase("version 2")});
+    createVault(other);
+    REQUIRE(json(request(Get, "/vaults/" + id + "/history", {accountToken({{id, "read"}})}))["versions"].size() == 2);
+
+    EventStream stream(accountToken({{id, "read"}}));
+    EventStream otherStream(accountToken({{other, "read"}}));
+    REQUIRE(stream.waitFor(": connected"));
+    REQUIRE(otherStream.waitFor(": connected"));
+
+    // Only with the shared secret: never an account token, not even one with manage, nor a device token
+    const auto path = "/internal/vaults/" + id;
+    auto missing = request(Delete, path);
+    CHECK(missing->statusCode() == k401Unauthorized);
+    CHECK(errorCode(missing) == "unauthorized");
+    CHECK(request(Delete, path, {"wrong"})->statusCode() == k401Unauthorized);
+    CHECK(request(Delete, path, {INTERNAL_TOKEN + "x"})->statusCode() == k401Unauthorized);
+    CHECK(request(Delete, path, {accountToken({{id, "manage"}})})->statusCode() == k401Unauthorized);
+    CHECK(request(Delete, path, {userToken()})->statusCode() == k401Unauthorized);
+    CHECK(request(Delete, path, {g_deviceToken})->statusCode() == k401Unauthorized);
+    CHECK(!stream.waitFor("\"deleted\":true", 0.3));
+    CHECK(request(Get, "/vaults/" + id, {accountToken({{id, "read"}})})->statusCode() == k200OK);
+
+    // Malformed ids are refused like on /vaults
+    auto malformed = request(Delete, "/internal/vaults/not-a-uuid", {INTERNAL_TOKEN});
+    CHECK(malformed->statusCode() == k400BadRequest);
+    CHECK(errorCode(malformed) == "invalid_request");
+    CHECK(request(Delete, "/internal/vaults/" + id + "/history", {INTERNAL_TOKEN})->statusCode() == k400BadRequest);
+
+    // Deleted with its history, and the vault's streams hear about it
+    auto deleted = request(Delete, path, {INTERNAL_TOKEN});
+    CHECK(deleted->statusCode() == k204NoContent);
+    CHECK(deleted->body().empty());
+    CHECK(stream.waitFor("event: vault"));
+    CHECK(stream.waitFor("\"deleted\":true"));
+    CHECK(stream.received().find("\"id\":\"" + id + "\"") != std::string::npos);
+    CHECK(!otherStream.waitFor("\"deleted\":true", 0.5));
+    auto gone = request(Get, "/vaults/" + id, {accountToken({{id, "read"}})});
+    CHECK(gone->statusCode() == k404NotFound);
+    CHECK(request(Get, "/vaults/" + id + "/history", {accountToken({{id, "read"}})})->statusCode() == k404NotFound);
+    CHECK(request(Get, "/vaults/" + id + "/history/1", {accountToken({{id, "read"}})})->statusCode()
+          == k404NotFound);
+    CHECK(request(Get, "/vaults/" + other, {accountToken({{other, "read"}})})->statusCode() == k200OK);
+
+    // No such blob (again, or never created): 404, which the auth server treats as done
+    for (const auto& absent : {id, newVaultId()}) {
+        auto notFound = request(Delete, "/internal/vaults/" + absent, {INTERNAL_TOKEN});
+        CHECK(notFound->statusCode() == k404NotFound);
+        CHECK(errorCode(notFound) == "not_found");
+        CHECK(json(notFound)["error"].isString());
+    }
+
+    // The id can be used again afterwards
+    createVault(id, "new");
+    CHECK(json(request(Get, "/vaults/" + id + "/history", {accountToken({{id, "read"}})}))["versions"].size() == 1);
+}
+#else
+DROGON_TEST(InternalRoutesAreOffWithoutAnInternalToken)
+{
+    // SYNC_INTERNAL_TOKEN unset: neither internal route exists, whatever token is sent
+    auto id = newVaultId();
+    createVault(id);
+    Json::Value body;
+    body["subjects"].append("user:5a0b7c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d");
+    body["event"] = "access";
+    body["data"]["vault"] = id;
+    body["data"]["change"] = "granted";
+    CHECK(postJson("/internal/notify", body, INTERNAL_TOKEN)->statusCode() == k404NotFound);
+    for (const auto& token : {std::string(), INTERNAL_TOKEN, accountToken({{id, "manage"}})}) {
+        auto resp = request(Delete, "/internal/vaults/" + id, {token});
+        CHECK(resp->statusCode() == k404NotFound);
+        CHECK(json(resp)["error"].asString() == "Not found.");
+    }
+    CHECK(request(Get, "/vaults/" + id, {accountToken({{id, "read"}})})->statusCode() == k200OK);
+}
+#endif
 
 DROGON_TEST(ClosesAccountStreamsWhenTheirTokenExpires)
 {
@@ -893,7 +976,9 @@ int main(int argc, char** argv)
 #endif
     config.authIssuer = ISSUER;
     config.authJwksUrl = "http://127.0.0.1:9/never-fetched/jwks.json";
+#ifndef SYNC_TEST_NO_INTERNAL_TOKEN
     config.internalToken = INTERNAL_TOKEN;
+#endif
     config.allowedOrigins = {WEB_ORIGIN};
     if (config.usesPostgres()) {
         std::string run;
