@@ -1,0 +1,508 @@
+openapi: 3.1.0
+info:
+  title: OpenVireo Sync Server
+  version: 1.0.0
+  license:
+    name: See LICENSE
+    url: https://github.com/openvireo/openvireo-sync-server/blob/develop/LICENSE
+  description: |
+    The HTTP API of `openvireo-sync-server`. It stores encrypted `.kdbx` files and never sees their contents.
+    See docs/api.md for how the pieces fit together.
+
+    Which routes exist depends on `SYNC_AUTH_MODE`: `standalone` has the database and pairing routes, `jwt` the
+    vault and internal routes, `both` all of them. `/health` and `/events` always exist. Routes the mode doesn't
+    have answer 404. The internal routes also need `SYNC_INTERNAL_TOKEN` to be set.
+
+    CORS: for origins in `SYNC_ALLOWED_ORIGINS` every route answers preflight with 204, allowing
+    `GET, HEAD, PUT, POST, DELETE` and the headers `Authorization, Content-Type, If-Match, If-None-Match`, and
+    responses expose `ETag, X-Database-Revision, Last-Modified`.
+
+    Every response has `Cache-Control: no-store`.
+servers:
+  - url: https://sync.openvireo.com/api/v1
+    description: Hosted (SYNC_AUTH_MODE both)
+  - url: http://127.0.0.1:8787/api/v1
+    description: Self-hosted default
+tags:
+  - name: health
+    description: Liveness
+  - name: databases
+    description: A self-hosted user's databases, with device tokens
+  - name: devices
+    description: Pairing new devices
+  - name: vaults
+    description: Account vaults, with access tokens from the account server
+  - name: events
+    description: Change notifications (server-sent events)
+  - name: internal
+    description: Called by the account server only
+security:
+  - device: []
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      tags: [health]
+      summary: Liveness check
+      security: []
+      responses:
+        '200':
+          description: The server is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { const: ok }
+
+  /databases:
+    get:
+      operationId: listDatabases
+      tags: [databases]
+      summary: List the user's databases
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [databases]
+                properties:
+                  databases: { type: array, items: { $ref: '#/components/schemas/Meta' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /databases/{id}:
+    parameters: [ { $ref: '#/components/parameters/DatabaseId' } ]
+    get:
+      operationId: getDatabase
+      tags: [databases]
+      summary: Download a database
+      description: HEAD works the same and returns no body.
+      parameters: [ { $ref: '#/components/parameters/IfNoneMatch' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Blob' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: putDatabase
+      tags: [databases]
+      summary: Upload a database
+      description: |
+        `If-None-Match: *` creates it (412 if it exists). `If-Match: "<etag>"` replaces exactly that version (412
+        if another device uploaded in the meantime). With neither header the upload creates the database, or gets
+        428 if it already exists. Sends a `database` event to the user's other streams.
+      parameters:
+        - { $ref: '#/components/parameters/IfMatch' }
+        - { $ref: '#/components/parameters/IfNoneMatch' }
+      requestBody: { $ref: '#/components/requestBodies/Kdbx' }
+      responses:
+        '200': { $ref: '#/components/responses/Uploaded' }
+        '201': { $ref: '#/components/responses/Uploaded' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '413': { $ref: '#/components/responses/TooLarge' }
+        '415': { $ref: '#/components/responses/NotKdbx' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+    delete:
+      operationId: deleteDatabase
+      tags: [databases]
+      summary: Delete a database and its history
+      parameters: [ { $ref: '#/components/parameters/IfMatch' } ]
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+
+  /databases/{id}/history:
+    parameters: [ { $ref: '#/components/parameters/DatabaseId' } ]
+    get:
+      operationId: listDatabaseVersions
+      tags: [databases]
+      summary: The current and kept versions, newest first
+      responses:
+        '200': { $ref: '#/components/responses/History' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /databases/{id}/history/{revision}:
+    parameters:
+      - { $ref: '#/components/parameters/DatabaseId' }
+      - { $ref: '#/components/parameters/Revision' }
+    get:
+      operationId: getDatabaseVersion
+      tags: [databases]
+      summary: Download one kept version
+      responses:
+        '200': { $ref: '#/components/responses/Blob' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /devices/pairing:
+    post:
+      operationId: createPairingCode
+      tags: [devices]
+      summary: Create a pairing code for another device of the same user
+      description: Works once and for 10 minutes. A user has at most 5 codes waiting; a new one replaces the oldest.
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, expiresAt]
+                properties:
+                  code: { type: string, example: WJDA-247W }
+                  expiresAt: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /devices/pairing/claim:
+    post:
+      operationId: claimPairingCode
+      tags: [devices]
+      summary: Trade a pairing code for a device token
+      description: |
+        Case, spaces and the dash in the code don't matter. Wrong codes are limited to 10 per client address and
+        100 in all per 10 minutes; after that, claims get 429 with Retry-After.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, deviceName]
+              properties:
+                code: { type: string, example: WJDA-247W }
+                deviceName: { type: string, example: Firefox on Linux }
+      responses:
+        '201':
+          description: The new device and its token, shown only once
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user, deviceId, token]
+                properties:
+                  user: { type: string }
+                  deviceId: { type: string }
+                  token: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429':
+          description: Too many wrong codes
+          headers:
+            Retry-After: { schema: { type: integer }, description: Seconds to wait }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /vaults:
+    get:
+      operationId: listVaults
+      tags: [vaults]
+      summary: The vaults in the token's vlt claim that exist (any role)
+      security: [ { access: [] } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [vaults]
+                properties:
+                  vaults: { type: array, items: { $ref: '#/components/schemas/Meta' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /vaults/{vault}:
+    parameters: [ { $ref: '#/components/parameters/Vault' } ]
+    get:
+      operationId: getVault
+      tags: [vaults]
+      summary: Download a vault (read)
+      description: HEAD works the same and returns no body. A vault the token doesn't list gets 403, whether it exists or not.
+      security: [ { access: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IfNoneMatch' } ]
+      responses:
+        '200': { $ref: '#/components/responses/Blob' }
+        '304': { $ref: '#/components/responses/NotModified' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: putVault
+      tags: [vaults]
+      summary: Create (manage) or update (write) a vault
+      description: |
+        `If-None-Match: *` creates it and needs the manage role. `If-Match: "<etag>"` updates it and needs write.
+        Without either header the upload always gets 428. Sends a `vault` event to the streams whose token lists
+        the vault.
+      security: [ { access: [] } ]
+      parameters:
+        - { $ref: '#/components/parameters/IfMatch' }
+        - { $ref: '#/components/parameters/IfNoneMatch' }
+      requestBody: { $ref: '#/components/requestBodies/Kdbx' }
+      responses:
+        '200': { $ref: '#/components/responses/Uploaded' }
+        '201': { $ref: '#/components/responses/Uploaded' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+        '413': { $ref: '#/components/responses/TooLarge' }
+        '415': { $ref: '#/components/responses/NotKdbx' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+    delete:
+      operationId: deleteVault
+      tags: [vaults]
+      summary: Delete a vault and its history (manage)
+      security: [ { access: [] } ]
+      parameters: [ { $ref: '#/components/parameters/IfMatch' } ]
+      responses:
+        '204': { description: Deleted; the vault's streams get a `vault` event with deleted true }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '412': { $ref: '#/components/responses/PreconditionFailed' }
+
+  /vaults/{vault}/history:
+    parameters: [ { $ref: '#/components/parameters/Vault' } ]
+    get:
+      operationId: listVaultVersions
+      tags: [vaults]
+      summary: The current and kept versions, newest first (read)
+      security: [ { access: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/History' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /vaults/{vault}/history/{revision}:
+    parameters:
+      - { $ref: '#/components/parameters/Vault' }
+      - { $ref: '#/components/parameters/Revision' }
+    get:
+      operationId: getVaultVersion
+      tags: [vaults]
+      summary: Download one kept version (read)
+      security: [ { access: [] } ]
+      responses:
+        '200': { $ref: '#/components/responses/Blob' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /events:
+    get:
+      operationId: streamEvents
+      tags: [events]
+      summary: Change notifications as server-sent events
+      description: |
+        Starts with `retry: 5000`; a `: ping` comment every 25 seconds keeps it open.
+
+        With a device token: `event: database`, data `{"id", "etag", "revision"}` or `{"id", "deleted": true}`,
+        for every change to one of the user's databases.
+
+        With an access token: `event: vault` (same data, for the vaults in the token) and `event: access`, data
+        `{"vault": uuid|null, "change": "granted"|"revoked"|"rotating"|"rotated"|"org"}`, when the account server
+        reports an access change for the token's subject. The stream ends once the token's `exp` has passed; the
+        client reconnects with a fresh token, and also after any `access` event.
+      security: [ { device: [] }, { access: [] } ]
+      responses:
+        '200':
+          description: The stream
+          headers:
+            X-Accel-Buffering: { schema: { const: 'no' } }
+          content:
+            text/event-stream:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /internal/notify:
+    post:
+      operationId: notifyAccess
+      tags: [internal]
+      summary: Push an access event to the open streams of some subjects
+      description: Delivery is best effort. With Postgres, the event reaches streams on every instance.
+      security: [ { internal: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subjects, event, data]
+              properties:
+                subjects: { type: array, items: { $ref: '#/components/schemas/Principal' } }
+                event: { const: access }
+                data:
+                  type: object
+                  required: [vault, change]
+                  properties:
+                    vault: { type: [string, 'null'], format: uuid }
+                    change: { enum: [granted, revoked, rotating, rotated, org] }
+      responses:
+        '204': { description: Sent }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /internal/vaults/{vault}:
+    parameters: [ { $ref: '#/components/parameters/Vault' } ]
+    delete:
+      operationId: deleteVaultInternal
+      tags: [internal]
+      summary: Delete a vault and its history when no client does, e.g. an expired recovery archive
+      security: [ { internal: [] } ]
+      responses:
+        '204': { description: Deleted; the vault's streams get a `vault` event with deleted true }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    device:
+      type: http
+      scheme: bearer
+      description: A device token (self-hosted). From `users add`, `devices add` or a pairing claim.
+    access:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        An account access token from the account server: EdDSA, `aud` containing `SYNC_AUTH_AUDIENCE` (default
+        `ov-sync`), and a `vlt` claim mapping vault ids to `read`, `write` or `manage`.
+    internal:
+      type: http
+      scheme: bearer
+      description: The `SYNC_INTERNAL_TOKEN` shared secret.
+
+  parameters:
+    DatabaseId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[A-Za-z0-9._-]{1,64}$' }
+    Vault:
+      name: vault
+      in: path
+      required: true
+      schema: { type: string, format: uuid, pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' }
+    Revision:
+      name: revision
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    IfMatch:
+      name: If-Match
+      in: header
+      schema: { type: string, example: '"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"' }
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      description: '`*` on uploads (create only), an ETag on downloads (304 when unchanged)'
+      schema: { type: string }
+
+  requestBodies:
+    Kdbx:
+      required: true
+      description: The encrypted database, starting with the KDBX file signature
+      content:
+        application/octet-stream:
+          schema: { type: string, format: binary }
+
+  headers:
+    ETag: { schema: { type: string }, description: The quoted SHA-256 of the file }
+    X-Database-Revision: { schema: { type: integer } }
+    Last-Modified: { schema: { type: string } }
+
+  responses:
+    Blob:
+      description: The encrypted file
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+        X-Database-Revision: { $ref: '#/components/headers/X-Database-Revision' }
+        Last-Modified: { $ref: '#/components/headers/Last-Modified' }
+      content:
+        application/octet-stream:
+          schema: { type: string, format: binary }
+    NotModified:
+      description: The ETag in If-None-Match is still current
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+        X-Database-Revision: { $ref: '#/components/headers/X-Database-Revision' }
+        Last-Modified: { $ref: '#/components/headers/Last-Modified' }
+    Uploaded:
+      description: 200 when it replaced a version, 201 when it created the database or vault
+      headers:
+        ETag: { $ref: '#/components/headers/ETag' }
+        X-Database-Revision: { $ref: '#/components/headers/X-Database-Revision' }
+        Last-Modified: { $ref: '#/components/headers/Last-Modified' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Meta' }
+    History:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [versions]
+            properties:
+              versions: { type: array, items: { $ref: '#/components/schemas/Meta' } }
+    BadRequest:
+      description: Invalid id, JSON or body
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unauthorized:
+      description: Missing, invalid or expired token
+      headers:
+        WWW-Authenticate: { schema: { type: string, example: 'Bearer realm="openvireo-sync"' } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: The token doesn't grant this, or is the wrong kind of token for the route
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: Not found
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    PreconditionFailed:
+      description: If-Match or If-None-Match didn't hold; download, merge and try again
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    PreconditionRequired:
+      description: The upload needs If-Match (update) or If-None-Match (create)
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    TooLarge:
+      description: Over SYNC_MAX_DB_BYTES; no body
+    NotKdbx:
+      description: The body isn't a KDBX file
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  schemas:
+    Meta:
+      type: object
+      required: [id, revision, etag, size, updatedAt]
+      properties:
+        id: { type: string, description: The database id or vault UUID }
+        revision: { type: integer, minimum: 1 }
+        etag: { type: string, description: The quoted SHA-256 of the file }
+        size: { type: integer, description: Bytes }
+        updatedAt: { type: string, format: date-time }
+    Principal:
+      type: string
+      pattern: '^(user|sa):[0-9a-f-]{36}$'
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, description: A message for people }
+        code:
+          description: Only on the vault and internal routes, and on /events when access tokens are accepted
+          enum: [invalid_request, unauthorized, forbidden, not_found, conflict, precondition_failed, precondition_required, rate_limited, internal_error]
