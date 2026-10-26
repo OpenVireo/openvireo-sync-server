@@ -89,6 +89,11 @@ if(BUILD_TESTING)
     target_compile_definitions(sync_server_jwt_no_internal_test PRIVATE SYNC_TEST_VECTORS="${SYNC_TEST_VECTORS}"
                                                                         SYNC_TEST_NO_INTERNAL_TOKEN)
     add_test(NAME sync_server_jwt_no_internal_test COMMAND sync_server_jwt_no_internal_test)
+
+    # Every route and environment variable is documented
+    add_test(NAME docs_coverage
+             COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR} -P
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test/docs_coverage.cmake)
 endif()
 
 install(TARGETS openvireo-sync-server RUNTIME DESTINATION bin)
