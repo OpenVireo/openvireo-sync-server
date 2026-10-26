@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
 # The sync server with both storage backends: the data directory (default, mount a volume on /data) and
-# Postgres plus an S3-compatible bucket (set SYNC_DATABASE_URL and SYNC_S3_*). See README.md.
+# Postgres plus an S3-compatible bucket (set SYNC_DATABASE_URL and SYNC_S3_*). See docs/install.md.
 #
 #   docker build -t openvireo-sync-server .
 #   docker build --target test -t openvireo-sync-server-test .   # the API tests, see compose.cloud.yaml
@@ -39,6 +39,8 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSYNC_SERVER_WITH_CLOUD=ON \
 
 # The API tests (standalone, both and jwt modes); they use Postgres and S3 when SYNC_DATABASE_URL and SYNC_S3_* are set
 FROM build AS test
+# For the docs_coverage test; copied here so a docs change doesn't rebuild the server
+COPY docs ./docs
 CMD ["ctest", "--test-dir", "/src/build", "--output-on-failure"]
 
 FROM debian:${DEBIAN_RELEASE}-slim AS runtime
