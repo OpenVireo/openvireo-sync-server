@@ -152,7 +152,7 @@ namespace syncserver
                 "Postgres " + postgres->describe() + ", bucket " + blobs->describe()};
 #else
         throw std::runtime_error("SYNC_DATABASE_URL is set, but this build has no Postgres and S3 support "
-                                 "(build it with a Drogon that has PostgreSQL, see README.md)");
+                                 "(build it with a Drogon that has PostgreSQL, see docs/install.md)");
 #endif
     }
 } // namespace syncserver
