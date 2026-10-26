@@ -195,6 +195,7 @@ server accepts access tokens, they also carry a machine-readable `code`. A `401`
 | `404` | `not_found` | No such database, vault, version or route |
 | `412` | `precondition_failed` | `If-Match` / `If-None-Match` didn't hold |
 | `413` | *(no body)* | Upload over `SYNC_MAX_DB_BYTES` |
+| `413` | `quota_exceeded` | Vault upload over the token's quota for it (`q`, see [accounts](accounts.md)); the body also has `max` |
 | `415` | `invalid_request` | The body isn't a KDBX file |
 | `428` | `precondition_required` | Upload without `If-Match` or `If-None-Match` |
 | `429` | `rate_limited` | Too many wrong pairing codes; see `Retry-After` |

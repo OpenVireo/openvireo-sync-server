@@ -27,12 +27,20 @@ namespace syncserver
 
         struct HttpError : std::runtime_error
         {
-            HttpError(HttpStatusCode status, const std::string& message)
+            // code overrides errorCodeFor(status); extra adds members to the JSON body (account routes only)
+            HttpError(HttpStatusCode status,
+                      const std::string& message,
+                      std::string code = {},
+                      Json::Value extra = Json::Value())
                 : std::runtime_error(message)
                 , status(status)
+                , code(std::move(code))
+                , extra(std::move(extra))
             {
             }
             HttpStatusCode status;
+            std::string code;
+            Json::Value extra;
         };
 
         HttpResponsePtr jsonResponse(HttpStatusCode status, const Json::Value& body)
@@ -65,12 +73,21 @@ namespace syncserver
             }
         }
 
-        HttpResponsePtr errorResponse(HttpStatusCode status, const std::string& message, bool withCode = false)
+        HttpResponsePtr errorResponse(HttpStatusCode status,
+                                      const std::string& message,
+                                      bool withCode = false,
+                                      const std::string& code = {},
+                                      const Json::Value& extra = Json::Value())
         {
             Json::Value body;
             body["error"] = message;
             if (withCode) {
-                body["code"] = errorCodeFor(status);
+                body["code"] = code.empty() ? errorCodeFor(status) : code;
+                if (extra.isObject()) {
+                    for (const auto& name : extra.getMemberNames()) {
+                        body[name] = extra[name];
+                    }
+                }
             }
             auto resp = jsonResponse(status, body);
             if (status == k401Unauthorized) {
@@ -88,7 +105,7 @@ namespace syncserver
             try {
                 resp = fn();
             } catch (const HttpError& e) {
-                resp = errorResponse(e.status, e.what(), withCode);
+                resp = errorResponse(e.status, e.what(), withCode, e.code, e.extra);
             } catch (const std::exception& e) {
                 LOG_ERROR << e.what();
                 resp = errorResponse(k500InternalServerError, "Internal server error.", withCode);
@@ -419,6 +436,7 @@ namespace syncserver
                             identity.emplace();
                             identity->subject = std::move(claims->subject);
                             identity->vaults = std::move(claims->vaults);
+                            identity->quotas = std::move(claims->quotas);
                             identity->expiresAt = claims->expiresAt;
                         }
                     } else if (m_acceptsDeviceTokens) {
@@ -659,6 +677,21 @@ namespace syncserver
                 }
             }
 
+            // The plan's limit on the vault's size, from the token (SPEC.md §19)
+            static void requireQuota(const Identity& identity, const std::string& vault, size_t bytes)
+            {
+                auto it = identity.quotas.find(vault);
+                if (it == identity.quotas.end() || bytes <= static_cast<uint64_t>(it->second)) {
+                    return;
+                }
+                Json::Value extra;
+                extra["max"] = static_cast<Json::Int64>(it->second);
+                throw HttpError(k413RequestEntityTooLarge,
+                                "The vault is larger than its plan allows (" + std::to_string(it->second) + " bytes).",
+                                "quota_exceeded",
+                                extra);
+            }
+
             /**
              * /api/v1/vaults/{uuid}[/history[/{revision}]] (sync-openapi.yaml). Roles from the token's vlt claim:
              * GET and HEAD need read; PUT with If-Match needs write; PUT with If-None-Match (create) and DELETE
@@ -688,6 +721,7 @@ namespace syncserver
                         throw HttpError(k428PreconditionRequired,
                                         "Uploading a vault requires If-Match (update) or If-None-Match: * (create).");
                     }
+                    requireQuota(identity, id, req->body().size());
                     return upload(req, m_vaults, VaultScope, id);
                 }
                 case Delete:
@@ -948,7 +982,7 @@ namespace syncserver
                                 try {
                                     identity = api->identify(req);
                                 } catch (const HttpError& e) {
-                                    callback(errorResponse(e.status, e.what(), withCode));
+                                    callback(errorResponse(e.status, e.what(), withCode, e.code, e.extra));
                                     return;
                                 }
                                 auto events = api->events();

@@ -136,6 +136,27 @@ namespace
         return sign(claims);
     }
 
+    // A manage token for one vault whose grant carries the plan's quota "q" (SPEC.md §19)
+    std::string quotaToken(const std::string& id, Json::Value quota)
+    {
+        Json::Value claims;
+        claims["iss"] = ISSUER;
+        claims["aud"].append("ov-api");
+        claims["aud"].append("ov-sync");
+        claims["sub"] = "user:5a0b7c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d";
+        Json::Value grant;
+        grant["id"] = id;
+        grant["r"] = "manage";
+        grant["q"] = std::move(quota);
+        claims["vlt"].append(grant);
+        const auto now = static_cast<Json::Int64>(g_now.load());
+        claims["iat"] = now;
+        claims["nbf"] = now;
+        claims["exp"] = now + 600;
+        claims["jti"] = utils::getUuid();
+        return sign(claims);
+    }
+
     // A lowercase hyphenated UUID
     std::string newVaultId()
     {
@@ -465,6 +486,14 @@ DROGON_TEST(VerifierRejectsMalformedTokens)
     auto parsed = verifier.verify(sign(oddGrants));
     REQUIRE(parsed.has_value());
     CHECK(parsed->vaults.empty());
+    // A quota is kept per vault; one that isn't a positive integer limits nothing
+    auto quotas = claims;
+    quotas["vlt"][0]["q"] = 26214400;
+    quotas["vlt"][1]["q"] = "lots";
+    auto limited = verifier.verify(sign(quotas));
+    REQUIRE(limited.has_value());
+    CHECK(limited->quotas.size() == 1);
+    CHECK(limited->quotas.at(quotas["vlt"][0]["id"].asString()) == 26214400);
 }
 
 // ---------------------------------------------------------------- the API
@@ -600,6 +629,31 @@ DROGON_TEST(RolesLimitWhatATokenMayDo)
     CHECK(badId->statusCode() == k400BadRequest);
     CHECK(errorCode(badId) == "invalid_request");
     CHECK(request(Get, "/vaults/" + other + "/history/99", {manager})->statusCode() == k404NotFound);
+}
+
+DROGON_TEST(QuotasLimitTheVaultSize)
+{
+    // The server itself takes up to 1024 bytes here (SYNC_MAX_DB_BYTES), the quota is lower
+    auto id = newVaultId();
+    auto small = fakeDatabase("x");
+    auto large = fakeDatabase(std::string(512, 'x'));
+    REQUIRE(small.size() < 256);
+    REQUIRE(large.size() > 256);
+    REQUIRE(large.size() < 1024);
+
+    // Over the quota: nothing is stored
+    auto tooBig = request(Put, "/vaults/" + id, {quotaToken(id, 256), {{"If-None-Match", "*"}}, large});
+    CHECK(tooBig->statusCode() == k413RequestEntityTooLarge);
+    CHECK(errorCode(tooBig) == "quota_exceeded");
+    CHECK(json(tooBig)["max"].asInt64() == 256);
+    CHECK(request(Get, "/vaults/" + id, {quotaToken(id, 256)})->statusCode() == k404NotFound);
+
+    // Within it, or with no quota, uploads go through
+    auto created = request(Put, "/vaults/" + id, {quotaToken(id, 256), {{"If-None-Match", "*"}}, small});
+    REQUIRE(created->statusCode() == k201Created);
+    auto unlimited = accountToken({{id, "manage"}});
+    CHECK(request(Put, "/vaults/" + id, {unlimited, {{"If-Match", created->getHeader("ETag")}}, large})->statusCode()
+          == k200OK);
 }
 
 DROGON_TEST(VaultsNeverShareStorageWithDatabases)
