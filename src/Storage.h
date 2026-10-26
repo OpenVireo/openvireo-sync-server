@@ -46,6 +46,8 @@ namespace syncserver
 
         std::string subject;
         std::map<std::string, VaultRole> vaults;
+        // Upload limits of the token's vaults in bytes (SPEC.md §19); a vault without one is unlimited
+        std::map<std::string, int64_t> quotas;
         // The token's exp, seconds since the Unix epoch; 0 for device tokens
         int64_t expiresAt = 0;
 

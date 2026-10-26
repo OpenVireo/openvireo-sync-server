@@ -325,6 +325,11 @@ namespace syncserver
             }
             auto& current = result.vaults[id];
             current = std::max(current, *role);
+            // A quota we can't read limits nothing
+            if (grant["q"].isIntegral() && grant["q"].asLargestInt() > 0) {
+                auto& quota = result.quotas[id];
+                quota = std::max<int64_t>(quota, grant["q"].asLargestInt());
+            }
         }
         return result;
     }

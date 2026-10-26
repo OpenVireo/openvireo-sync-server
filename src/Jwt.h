@@ -35,6 +35,8 @@ namespace syncserver
             // "user:<uuid>" or "sa:<uuid>"
             std::string subject;
             std::map<std::string, VaultRole> vaults;
+            // The largest database each vault may hold, from the grant's "q" (SPEC.md §19); absent is unlimited
+            std::map<std::string, int64_t> quotas;
             int64_t expiresAt = 0;
         };
 

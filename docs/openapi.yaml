@@ -380,7 +380,8 @@ components:
       bearerFormat: JWT
       description: |
         An account access token from the account server: EdDSA, `aud` containing `SYNC_AUTH_AUDIENCE` (default
-        `ov-sync`), and a `vlt` claim mapping vault ids to `read`, `write` or `manage`.
+        `ov-sync`), and a `vlt` claim mapping vault ids to `read`, `write` or `manage`, with an optional size
+        quota `q` in bytes.
     internal:
       type: http
       scheme: bearer
@@ -480,7 +481,10 @@ components:
       description: The upload needs If-Match (update) or If-None-Match (create)
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
     TooLarge:
-      description: Over SYNC_MAX_DB_BYTES; no body
+      description: |
+        Over SYNC_MAX_DB_BYTES (no body), or on a vault over the token's quota `q` for it: code `quota_exceeded`,
+        and `max` (bytes) in the body
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
     NotKdbx:
       description: The body isn't a KDBX file
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
@@ -505,4 +509,4 @@ components:
         error: { type: string, description: A message for people }
         code:
           description: Only on the vault and internal routes, and on /events when access tokens are accepted
-          enum: [invalid_request, unauthorized, forbidden, not_found, conflict, precondition_failed, precondition_required, rate_limited, internal_error]
+          enum: [invalid_request, unauthorized, forbidden, not_found, conflict, precondition_failed, precondition_required, quota_exceeded, rate_limited, internal_error]

@@ -61,6 +61,11 @@ The token's `vlt` claim lists the vaults it opens and the role for each:
 | `manage` | also create (`PUT` with `If-None-Match: *`) and delete |
 
 A vault the token doesn't list gets `403`, whether it exists or not, so a token can't probe for other vaults.
+
+An entry may also carry `q`, the largest database the vault may hold under its owner's plan (bytes; the
+hosted service's plans, SPEC.md §19). A larger upload gets `413` with code `quota_exceeded` and `max`, before
+anything is stored. Without `q` only `SYNC_MAX_DB_BYTES` applies, which is always the case on a self-hosted
+account server.
 The token's `sub` (`user:<uuid>` or `sa:<uuid>` for a service account) decides which
 [access events](api.md#account-events) its events stream receives.
 
