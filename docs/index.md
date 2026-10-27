@@ -35,7 +35,7 @@ cmake --build build
 ./build/openvireo-sync-server                          # http://127.0.0.1:8787
 ```
 
-Or with Docker, see [Installing and deploying](install.md).
+Or download a release binary, or use Docker; see [Installing and deploying](install.md).
 
 Then in OpenVireo:
 
@@ -54,7 +54,7 @@ database, save it locally, and upload the result. Other devices use the same Dat
 
 ## Contents
 
-- [Installing and deploying](install.md): from source, Docker and GHCR images, DigitalOcean, HTTPS
+- [Installing and deploying](install.md): release binaries, from source, Docker and GHCR images, DigitalOcean, HTTPS
 - [Configuration](configuration.md): every `SYNC_*` variable, and the two storage backends
 - [Users and devices](users-and-devices.md): the command line, pairing, revoking a lost device
 - [Accounts and vaults](accounts.md): running the server behind an OpenVireo account server

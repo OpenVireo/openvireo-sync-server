@@ -1,0 +1,65 @@
+# syntax=docker/dockerfile:1
+#
+# The sync server as one statically linked binary (musl, with Postgres and S3 storage) that runs on any Linux of
+# the build's architecture, packed with the licence and docs. The release workflow attaches it to the GitHub release.
+#
+#   docker build -f Dockerfile.static --target test .                          # the API tests against the static build
+#   docker build -f Dockerfile.static --build-arg VERSION=1.2.3 -o dist .      # dist/openvireo-sync-server-1.2.3-linux-<arch>.tar.gz
+
+ARG ALPINE_RELEASE=3.22
+
+# Drogon with PostgreSQL support, linked only against static libraries. This layer only changes with DROGON_VERSION.
+FROM alpine:${ALPINE_RELEASE} AS drogon
+RUN apk add --no-cache \
+        build-base cmake git linux-headers \
+        brotli-dev brotli-static jsoncpp-dev jsoncpp-static libpq-dev openssl-dev openssl-libs-static \
+        sqlite-dev sqlite-static util-linux-dev util-linux-static zlib-dev zlib-static \
+    # Without the unversioned .so links only the .a is left to link. jsoncpp's CMake package names the shared library
+    # whatever the suffix setting; without it Drogon falls back to its own FindJsoncpp.
+    && rm -rf /usr/lib/cmake/jsoncpp \
+    && rm -f /usr/lib/libjsoncpp.so /usr/lib/libbrotli*.so /usr/lib/libpq.so /usr/lib/libssl.so /usr/lib/libcrypto.so \
+        /usr/lib/libsqlite3.so /usr/lib/libuuid.so /usr/lib/libz.so
+# Makes every find_library pick the .a, in Drogon's build and in the server's
+ENV STATIC_CMAKE_ARGS="-DCMAKE_FIND_LIBRARY_SUFFIXES=.a -DBUILD_SHARED_LIBS=OFF -DOPENSSL_USE_STATIC_LIBS=ON"
+ARG DROGON_VERSION=v1.9.14
+RUN git clone --depth 1 --branch "${DROGON_VERSION}" --recurse-submodules --shallow-submodules \
+        https://github.com/drogonframework/drogon /tmp/drogon \
+    && cmake -S /tmp/drogon -B /tmp/drogon/build ${STATIC_CMAKE_ARGS} \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_POSTGRESQL=ON -DBUILD_MYSQL=OFF -DBUILD_SQLITE=OFF -DBUILD_REDIS=OFF \
+        -DBUILD_EXAMPLES=OFF -DBUILD_CTL=OFF -DBUILD_TESTING=OFF -DBUILD_YAML_CONFIG=OFF \
+    && cmake --build /tmp/drogon/build --parallel "$(nproc)" \
+    && cmake --install /tmp/drogon/build \
+    && rm -rf /tmp/drogon
+
+FROM drogon AS build
+WORKDIR /src
+COPY CMakeLists.txt ./
+COPY src ./src
+COPY test ./test
+# libpq.a leaves out the Postgres helper libraries and OpenSSL, which its shared library pulls in itself
+RUN cmake -S . -B build ${STATIC_CMAKE_ARGS} \
+        -DCMAKE_BUILD_TYPE=Release -DSYNC_SERVER_WITH_CLOUD=ON -DSYNC_SERVER_PORTABLE=ON \
+        -DCMAKE_EXE_LINKER_FLAGS="-static" \
+        -DCMAKE_CXX_STANDARD_LIBRARIES="-lpgcommon_shlib -lpgport_shlib -lssl -lcrypto" \
+    && cmake --build build --parallel "$(nproc)" \
+    && cmake --install build --prefix /out --strip \
+    && if readelf -l /out/bin/openvireo-sync-server | grep -q interpreter; then echo "not statically linked" >&2; exit 1; fi
+
+FROM build AS test
+COPY docs ./docs
+RUN ctest --test-dir /src/build --output-on-failure
+
+FROM alpine:${ALPINE_RELEASE} AS package
+ARG VERSION=dev
+ARG TARGETARCH
+COPY --from=build /out/bin/openvireo-sync-server /pkg/openvireo-sync-server-${VERSION}/
+COPY LICENSE README.md /pkg/openvireo-sync-server-${VERSION}/
+COPY docs /pkg/openvireo-sync-server-${VERSION}/docs/
+COPY packaging/openvireo-sync-server.service /pkg/openvireo-sync-server-${VERSION}/
+RUN arch="$(case "${TARGETARCH}" in amd64) echo x64 ;; *) echo "${TARGETARCH}" ;; esac)" \
+    && mkdir /dist \
+    && tar -C /pkg -czf "/dist/openvireo-sync-server-${VERSION}-linux-${arch}.tar.gz" "openvireo-sync-server-${VERSION}"
+
+FROM scratch AS dist
+COPY --from=package /dist/ /

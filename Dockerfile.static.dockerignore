@@ -1,0 +1,7 @@
+# Dockerfile.static packs the docs and README, which .dockerignore leaves out
+build/
+data/
+uploads/
+compose*.yaml
+.do/
+.kamal/

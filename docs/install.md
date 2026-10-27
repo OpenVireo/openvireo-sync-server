@@ -1,5 +1,37 @@
 # Installing and deploying
 
+## Release binary
+
+Each [release](https://github.com/OpenVireo/openvireo-sync-server/releases) has the server as one statically
+linked binary for Linux x64 and arm64. It runs on any distribution, needs nothing installed, and includes
+Postgres and S3 support:
+
+```sh
+v=VERSION a=x64     # VERSION: the release without the v, e.g. 0.2.0; a: x64 or arm64
+curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/openvireo-sync-server-$v-linux-$a.tar.gz"
+curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS
+tar -xzf "openvireo-sync-server-$v-linux-$a.tar.gz" && cd "openvireo-sync-server-$v"
+sudo install openvireo-sync-server /usr/local/bin/
+```
+
+The archive also has the docs and a systemd unit, `openvireo-sync-server.service`, which runs the server as
+the user `openvireo-sync` with its data in `/var/lib/openvireo-sync-server` and reads settings from
+`/etc/openvireo-sync-server.env`:
+
+```sh
+sudo useradd --system --home-dir /var/lib/openvireo-sync-server --shell /usr/sbin/nologin openvireo-sync
+sudo install -m 0644 openvireo-sync-server.service /etc/systemd/system/
+echo SYNC_BEHIND_PROXY=1 | sudo tee /etc/openvireo-sync-server.env    # see Configuration
+sudo systemctl enable --now openvireo-sync-server
+sudo -u openvireo-sync env SYNC_DATA_DIR=/var/lib/openvireo-sync-server openvireo-sync-server users add alice laptop
+```
+
+For HTTPS connections (the account server's JWKS, S3) it uses the distribution's CA certificates in
+`/etc/ssl` (the `ca-certificates` package). It ignores the system's `openssl.cnf`, which belongs to the
+distribution's own OpenSSL; set `OPENSSL_CONF` to use one anyway. It's built by `Dockerfile.static`:
+`docker build -f Dockerfile.static -o dist .`
+
 ## From source
 
 The server is C++17 on [Drogon](https://github.com/drogonframework/drogon), with SQLite for the default
@@ -17,6 +49,8 @@ Postgres and S3 support (see [Storage](configuration.md#storage)) needs Drogon b
 when it finds such a Drogon; `-DSYNC_SERVER_WITH_CLOUD=ON` makes it required. The Docker image always has it.
 
 `cmake --install build` installs the single binary, `openvireo-sync-server`. It has no other files.
+`-DSYNC_SERVER_PORTABLE=ON` makes it ignore the system's `openssl.cnf` unless `OPENSSL_CONF` is set, as the
+release binary does.
 
 ## Docker
 

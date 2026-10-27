@@ -63,6 +63,13 @@ endif()
 add_executable(openvireo-sync-server src/main.cpp)
 target_link_libraries(openvireo-sync-server PRIVATE sync_server_core)
 
+# For the statically linked release binary (Dockerfile.static), which runs on distributions whose openssl.cnf was
+# written for their own OpenSSL
+option(SYNC_SERVER_PORTABLE "Ignore the system's openssl.cnf unless OPENSSL_CONF names one" OFF)
+if(SYNC_SERVER_PORTABLE)
+    target_compile_definitions(openvireo-sync-server PRIVATE SYNC_SERVER_PORTABLE)
+endif()
+
 option(BUILD_TESTING "Build the API tests" ON)
 if(BUILD_TESTING)
     enable_testing()
