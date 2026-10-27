@@ -38,7 +38,7 @@ env:
   # The vcpkg tool and scripts; the ports come from the baseline in packaging/vcpkg/vcpkg-configuration.json
   VCPKG_COMMIT: d90cb72e90dc7ce9a38ee77c4cafa398a4e6a800
   # Keep in step with VCPKG_OSX_DEPLOYMENT_TARGET in packaging/vcpkg/triplets and docs/install.md
-  MACOSX_DEPLOYMENT_TARGET: "12.0"
+  MACOSX_DEPLOYMENT_TARGET: "13.3"
 
 jobs:
   build:

@@ -1,8 +1,9 @@
 {
   "$comment": [
     "ports/ holds Drogon 1.9.14 and Trantor 1.5.29, the versions the Linux builds use (Dockerfile, Dockerfile.static),",
-    "ahead of this baseline: microsoft/vcpkg's ports at the baseline with the new version and SHA512, without drogon's",
-    "0004 (drogon_ctl views, unused) and 0005 (upstream since 1.9.14) patches. Drop them once the baseline has these."
+    "ahead of this baseline: microsoft/vcpkg's ports at the baseline with the new version and SHA512. Drogon's patches",
+    "for drogon_ctl views (unused) and chunked encoding (upstream since 1.9.14) are left out, and 0004 links jsoncpp's",
+    "static library, which Drogon 1.9.14 names only with USE_STATIC_LIBS_ONLY. Drop them once the baseline has these."
   ],
   "default-registry": {
     "kind": "git",

@@ -47,4 +47,8 @@ request as its docs.
 
 Push a version tag: `git tag v1.2.3 && git push origin v1.2.3`. `.github/workflows/release.yml` runs the API tests,
 builds the image for linux/amd64 and linux/arm64, publishes it to GHCR as `:1.2.3`, `:1.2`, `:1` and `:latest`
-(a pre-release only as itself), and creates the GitHub release.
+(a pre-release only as itself), and creates the GitHub release with the binaries: Linux from `Dockerfile.static`,
+macOS and Windows from `.github/workflows/binaries-native.yml`. That workflow publishes nothing, so a branch can be
+tried with `gh workflow run binaries-native.yml --ref <branch>`; it builds with vcpkg (`packaging/vcpkg`), runs the
+tests, packs each binary and checks with `.github/scripts/smoke-test.sh` that it starts and verifies TLS
+certificates.
