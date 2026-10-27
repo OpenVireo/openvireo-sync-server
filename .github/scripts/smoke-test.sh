@@ -78,14 +78,19 @@ jwks() {
     stop
 }
 
-# A public server whose certificate chains to a root in the system's store
-jwks trusted 18781 https://token.actions.githubusercontent.com/.well-known/jwks
-grep -q "The JWKS has no Ed25519 signing key" "$work/trusted.log" \
-    || fail "trusted: the JWKS from a publicly trusted server wasn't fetched"
+# A public server whose certificate chains to a root in the system's store. The network can be slow on CI runners,
+# so it gets three tries, each with a fresh server (one server waits before it fetches the JWKS again).
+for attempt in 1 2 3; do
+    jwks trusted 18781 https://token.actions.githubusercontent.com/.well-known/jwks
+    if grep -q "The JWKS has no Ed25519 signing key" "$work/trusted.log"; then break; fi
+    [[ $attempt == 3 ]] && fail "trusted: the JWKS from a publicly trusted server wasn't fetched"
+    echo "trusted: attempt $attempt failed: $(grep "Cannot fetch" "$work/trusted.log" || echo "no fetch logged")"
+done
 echo "ok: fetched the JWKS from a server with a publicly trusted certificate"
 
 # A local HTTPS server with a self-signed certificate, which logs every request it gets
-MSYS2_ARG_CONV_EXCL='*' openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 \
+# Git Bash on Windows rewrites arguments that look like paths; keep it off the subject only, not the file names
+MSYS2_ARG_CONV_EXCL=/CN openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 \
     -addext subjectAltName=IP:127.0.0.1 -keyout "$work/key.pem" -out "$work/cert.pem" 2>"$work/openssl.log" \
     || fail "openssl couldn't make the test certificate"
 cat >"$work/https.py" <<'EOF'
