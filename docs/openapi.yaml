@@ -20,7 +20,7 @@ info:
     Every response has `Cache-Control: no-store`.
 servers:
   - url: https://sync.openvireo.com/api/v1
-    description: Hosted (SYNC_AUTH_MODE both)
+    description: Hosted (SYNC_AUTH_MODE jwt)
   - url: http://127.0.0.1:8787/api/v1
     description: Self-hosted default
 tags:
