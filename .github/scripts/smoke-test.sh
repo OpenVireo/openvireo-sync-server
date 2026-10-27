@@ -25,8 +25,9 @@ case "$archive" in
 esac
 bin=$(ls "$work"/openvireo-sync-server-*/openvireo-sync-server "$work"/openvireo-sync-server-*/openvireo-sync-server.exe 2>/dev/null | head -n 1 || true)
 [[ -n "$bin" ]] || { echo "No binary in $archive" >&2; exit 1; }
+# Git Bash finds foo.exe when asked for foo and prints the name without .exe, so look for the file itself
 windows=false
-[[ "$bin" == *.exe ]] && windows=true
+[[ -f "${bin%.exe}.exe" ]] && windows=true
 
 fail() {
     echo "FAIL: $*" >&2
