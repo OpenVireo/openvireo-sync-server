@@ -2,21 +2,45 @@
 
 ## Release binary
 
-Each [release](https://github.com/OpenVireo/openvireo-sync-server/releases) has the server as one statically
-linked binary for Linux x64 and arm64. It runs on any distribution, needs nothing installed, and includes
-Postgres and S3 support:
+Each [release](https://github.com/OpenVireo/openvireo-sync-server/releases) has the server as one binary that
+needs nothing installed, with Postgres and S3 support, for:
+
+| Platform | Archive |
+|---|---|
+| Linux x64, arm64 (any distribution, statically linked) | `openvireo-sync-server-VERSION-linux-x64.tar.gz`, `…-linux-arm64.tar.gz` |
+| macOS 12 or later, Apple silicon and Intel | `openvireo-sync-server-VERSION-darwin-arm64.tar.gz`, `…-darwin-x64.tar.gz` |
+| Windows 10, 11, Server 2016 or later, x64 | `openvireo-sync-server-VERSION-windows-x64.zip` |
+
+Each archive has a directory `openvireo-sync-server-VERSION` with the binary, the licence, the README and these
+docs. `SHA256SUMS` on the release lists their checksums, and `SHA256SUMS.asc` is its signature with the OpenVireo
+release key, the same one as the desktop app's releases: fingerprint
+`23F6 403E 9392 E946 475E 7FD3 B556 83A4 3E98 C11C`. Import it once, then `gpg --verify SHA256SUMS.asc SHA256SUMS`
+must say "Good signature" with that primary key fingerprint (see
+[Verifying Signatures](https://openvireo.com/verifying-signatures)):
+
+```sh
+curl -sSL https://openvireo.com/openvireo-release.asc | gpg --import
+# or: gpg --keyserver hkps://keys.openpgp.org --recv-keys 23F6403E9392E946475E7FD3B55683A43E98C11C
+```
+ For an always-on server, Linux (with the systemd unit
+below) or [Docker](#docker) is the best supported; on macOS and Windows the binary is as good for a server that
+runs while you are logged in, for trying things out and for the `users` and `devices` commands.
+
+### Linux
 
 ```sh
 v=VERSION a=x64     # VERSION: the release without the v, e.g. 0.2.0; a: x64 or arm64
 curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/openvireo-sync-server-$v-linux-$a.tar.gz"
 curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/SHA256SUMS"
+curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/SHA256SUMS.asc"
+gpg --verify SHA256SUMS.asc SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS
 tar -xzf "openvireo-sync-server-$v-linux-$a.tar.gz" && cd "openvireo-sync-server-$v"
 sudo install openvireo-sync-server /usr/local/bin/
 ```
 
-The archive also has the docs and a systemd unit, `openvireo-sync-server.service`, which runs the server as
-the user `openvireo-sync` with its data in `/var/lib/openvireo-sync-server` and reads settings from
+The archive also has a systemd unit, `openvireo-sync-server.service`, which runs the server as the user
+`openvireo-sync` with its data in `/var/lib/openvireo-sync-server` and reads settings from
 `/etc/openvireo-sync-server.env`:
 
 ```sh
@@ -28,9 +52,70 @@ sudo -u openvireo-sync env SYNC_DATA_DIR=/var/lib/openvireo-sync-server openvire
 ```
 
 For HTTPS connections (the account server's JWKS, S3) it uses the distribution's CA certificates in
-`/etc/ssl` (the `ca-certificates` package). It ignores the system's `openssl.cnf`, which belongs to the
-distribution's own OpenSSL; set `OPENSSL_CONF` to use one anyway. It's built by `Dockerfile.static`:
-`docker build -f Dockerfile.static -o dist .`
+`/etc/ssl` (the `ca-certificates` package). It's built by `Dockerfile.static`: `docker build -f Dockerfile.static -o dist .`
+
+### macOS
+
+```sh
+v=VERSION a=arm64   # a: arm64 (Apple silicon) or x64 (Intel)
+curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/openvireo-sync-server-$v-darwin-$a.tar.gz"
+curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/SHA256SUMS"
+curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/SHA256SUMS.asc"
+gpg --verify SHA256SUMS.asc SHA256SUMS    # gpg from GPG Suite or brew install gnupg
+shasum -a 256 --ignore-missing -c SHA256SUMS
+tar -xzf "openvireo-sync-server-$v-darwin-$a.tar.gz" && cd "openvireo-sync-server-$v"
+./openvireo-sync-server users add alice laptop
+./openvireo-sync-server                # http://127.0.0.1:8787, data in ./data
+```
+
+The binary isn't signed with an Apple Developer ID yet. Downloaded with `curl` it runs as is; downloaded with a
+browser, macOS blocks it ("cannot be opened because the developer cannot be verified") until you remove the
+quarantine attribute: `xattr -d com.apple.quarantine openvireo-sync-server`. It uses only libraries that are
+part of macOS.
+
+For HTTPS connections it trusts the CA certificates in `/etc/ssl/cert.pem`, the bundle macOS ships and updates
+with the system. Certificates you added to the Keychain are not used: for a private CA (say, of your own account
+server) set `SSL_CERT_FILE` to a PEM file with that CA and, if needed, the public ones (e.g. a copy of
+`/etc/ssl/cert.pem` with your CA appended). To keep it running, use a launchd job (a LaunchAgent or LaunchDaemon
+with `SYNC_DATA_DIR` in its `EnvironmentVariables`), or Docker.
+
+### Windows
+
+In PowerShell:
+
+```powershell
+$v = "VERSION"
+$base = "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v"
+Invoke-WebRequest "$base/openvireo-sync-server-$v-windows-x64.zip" -OutFile "openvireo-sync-server-$v-windows-x64.zip"
+Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
+Invoke-WebRequest "$base/SHA256SUMS.asc" -OutFile SHA256SUMS.asc
+gpg --verify SHA256SUMS.asc SHA256SUMS       # gpg from Gpg4win
+(Get-FileHash "openvireo-sync-server-$v-windows-x64.zip").Hash   # compare with its line in SHA256SUMS
+Expand-Archive "openvireo-sync-server-$v-windows-x64.zip" . ; cd "openvireo-sync-server-$v"
+.\openvireo-sync-server.exe users add alice laptop
+.\openvireo-sync-server.exe           # http://127.0.0.1:8787, data in .\data
+```
+
+The binary isn't code signed yet, so SmartScreen may warn when you start a downloaded copy from Explorer
+(**More info → Run anyway**). Windows Firewall asks for permission only if you make it listen on the network
+(`SYNC_HOST`). It needs no runtime or DLLs beyond Windows itself.
+
+Windows has no file modes: the files in the data directory inherit the directory's access control list, so keep
+`SYNC_DATA_DIR` somewhere only you or the server's account can read, such as a folder in your user profile. For
+HTTPS connections it trusts the certificates in Windows' *Trusted Root Certification Authorities* store; add a
+private CA there (Windows ignores `SSL_CERT_FILE`). Windows installs some public roots only when a Windows
+program first needs them, so if a fetch fails with `Invalid certificate` for a public server, opening its URL
+once in Edge installs the missing root.
+
+It's a console program, not a Windows service, so `sc.exe create` can't run it. To keep it running without a
+logged-in user, wrap it with a service wrapper such as [WinSW](https://github.com/winsw/winsw) or
+[NSSM](https://nssm.cc) and set `SYNC_DATA_DIR` there, or run it in Docker or WSL.
+
+### All platforms
+
+The binary ignores the system's `openssl.cnf`, which belongs to another OpenSSL (the distribution's, macOS's
+LibreSSL); set `OPENSSL_CONF` to use one anyway. The macOS and Windows binaries are built by
+`.github/workflows/binaries-native.yml`; see [From source](#from-source) to build one yourself.
 
 ## From source
 
@@ -50,7 +135,43 @@ when it finds such a Drogon; `-DSYNC_SERVER_WITH_CLOUD=ON` makes it required. Th
 
 `cmake --install build` installs the single binary, `openvireo-sync-server`. It has no other files.
 `-DSYNC_SERVER_PORTABLE=ON` makes it ignore the system's `openssl.cnf` unless `OPENSSL_CONF` is set, as the
-release binary does.
+release binaries do.
+
+### With vcpkg (macOS and Windows)
+
+The release binaries for macOS and Windows link static libraries from [vcpkg](https://vcpkg.io): the manifest
+in `packaging/vcpkg` pins the versions (Drogon with PostgreSQL, OpenSSL, libpq, SQLite) and has triplets for
+release-only static builds. You need CMake, a C++17 compiler (Xcode's command line tools, or Visual Studio 2022
+or later with *Desktop development with C++*), Git, Python 3.10 or later (vcpkg builds libpq with Meson) and a
+clone of vcpkg:
+
+```sh
+git clone https://github.com/microsoft/vcpkg && ./vcpkg/bootstrap-vcpkg.sh    # bootstrap-vcpkg.bat on Windows
+export VCPKG_ROOT=$PWD/vcpkg
+```
+
+On macOS (`arm64-osx-release-static` on Apple silicon, `x64-osx-release-static` on Intel):
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+  -DVCPKG_MANIFEST_DIR="$PWD/packaging/vcpkg" -DVCPKG_TARGET_TRIPLET=arm64-osx-release-static \
+  -DSYNC_SERVER_WITH_CLOUD=ON -DSYNC_SERVER_PORTABLE=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+  "-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local"
+cmake --build build && ctest --test-dir build
+```
+
+`CMAKE_IGNORE_PREFIX_PATH` keeps Homebrew's libraries out of the binary. On Windows, in PowerShell:
+
+```powershell
+cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+  -DVCPKG_MANIFEST_DIR="$PWD/packaging/vcpkg" -DVCPKG_TARGET_TRIPLET=x64-windows-release-static `
+  -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DSYNC_SERVER_WITH_CLOUD=ON -DSYNC_SERVER_PORTABLE=ON
+cmake --build build --config Release; ctest --test-dir build -C Release
+```
+
+The first configure builds the libraries, which takes a while; vcpkg caches them for the next. The binary is
+`build/openvireo-sync-server` (on Windows `build\Release\openvireo-sync-server.exe`).
 
 ## Docker
 
