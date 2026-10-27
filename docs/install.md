@@ -8,7 +8,7 @@ needs nothing installed, with Postgres and S3 support, for:
 | Platform | Archive |
 |---|---|
 | Linux x64, arm64 (any distribution, statically linked) | `openvireo-sync-server-VERSION-linux-x64.tar.gz`, `…-linux-arm64.tar.gz` |
-| macOS 12 or later, Apple silicon and Intel | `openvireo-sync-server-VERSION-darwin-arm64.tar.gz`, `…-darwin-x64.tar.gz` |
+| macOS 13.3 or later, Apple silicon and Intel | `openvireo-sync-server-VERSION-darwin-arm64.tar.gz`, `…-darwin-x64.tar.gz` |
 | Windows 10, 11, Server 2016 or later, x64 | `openvireo-sync-server-VERSION-windows-x64.zip` |
 
 Each archive has a directory `openvireo-sync-server-VERSION` with the binary, the licence, the README and these
@@ -156,7 +156,7 @@ On macOS (`arm64-osx-release-static` on Apple silicon, `x64-osx-release-static` 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
   -DVCPKG_MANIFEST_DIR="$PWD/packaging/vcpkg" -DVCPKG_TARGET_TRIPLET=arm64-osx-release-static \
-  -DSYNC_SERVER_WITH_CLOUD=ON -DSYNC_SERVER_PORTABLE=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+  -DSYNC_SERVER_WITH_CLOUD=ON -DSYNC_SERVER_PORTABLE=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 \
   "-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local"
 cmake --build build && ctest --test-dir build
 ```

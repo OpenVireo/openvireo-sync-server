@@ -35,7 +35,8 @@ cmake --build build
 ./build/openvireo-sync-server                          # http://127.0.0.1:8787
 ```
 
-Or download a release binary, or use Docker; see [Installing and deploying](install.md).
+Or download a release binary for Linux, macOS or Windows, or use Docker; see
+[Installing and deploying](install.md).
 
 Then in OpenVireo:
 
