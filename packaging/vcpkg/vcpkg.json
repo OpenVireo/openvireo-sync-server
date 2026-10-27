@@ -1,0 +1,14 @@
+{
+  "name": "openvireo-sync-server",
+  "description": "Static libraries for the native macOS and Windows binaries (binaries-native.yml, docs/install.md)",
+  "dependencies": [
+    {
+      "name": "drogon",
+      "features": [
+        "postgres"
+      ]
+    },
+    "openssl",
+    "sqlite3"
+  ]
+}

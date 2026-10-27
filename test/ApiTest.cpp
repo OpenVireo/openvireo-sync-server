@@ -24,11 +24,7 @@
 #include <sstream>
 #include <thread>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
+#include "TestPlatform.h"
 
 using namespace drogon;
 namespace fs = std::filesystem;
@@ -212,12 +208,12 @@ DROGON_TEST(AuthModeAcceptsItsOldName)
 {
     // Servers configured before the rename keep starting
     for (const auto* value : {"standalone", "legacy"}) {
-        setenv("SYNC_AUTH_MODE", value, 1);
+        testplatform::setEnv("SYNC_AUTH_MODE", value);
         CHECK(syncserver::Config::fromEnvironment().authMode == syncserver::AuthMode::Standalone);
     }
-    setenv("SYNC_AUTH_MODE", "selfhosted", 1);
+    testplatform::setEnv("SYNC_AUTH_MODE", "selfhosted");
     CHECK_THROWS(syncserver::Config::fromEnvironment());
-    unsetenv("SYNC_AUTH_MODE");
+    testplatform::unsetEnv("SYNC_AUTH_MODE");
 }
 
 DROGON_TEST(AnswersCorsForTheHostedWebApp)
@@ -438,7 +434,7 @@ DROGON_TEST(ListsDevicesAndWhenTheyWereLastSeen)
     CHECK_THROWS(users.addDevice("carol", ""));
     CHECK_THROWS(users.addDevice("nobody", "phone"));
     if (!dir.empty()) {
-        fs::remove_all(dir);
+        testplatform::removeAll(dir);
     }
 }
 
@@ -486,7 +482,7 @@ DROGON_TEST(ImportsUsersJsonFromOlderServers)
     syncserver::UserStore reopened(dir);
     CHECK(reopened.listDevices("dave").size() == 1);
     CHECK(!reopened.authenticate(oldToken).has_value());
-    fs::remove_all(dir);
+    testplatform::removeAll(dir);
 }
 
 DROGON_TEST(ListsAndReturnsKeptVersions)
@@ -532,24 +528,15 @@ namespace
         explicit EventStream(const std::string& token)
         {
             auto port = std::stoi(g_baseUrl.substr(g_baseUrl.rfind(':') + 1));
-            m_socket = ::socket(AF_INET, SOCK_STREAM, 0);
-            sockaddr_in address{};
-            address.sin_family = AF_INET;
-            address.sin_port = htons(static_cast<uint16_t>(port));
-            address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-            if (::connect(m_socket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-                throw std::runtime_error("cannot connect");
-            }
-            timeval timeout{0, 200 * 1000};
-            ::setsockopt(m_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+            m_socket = testplatform::connectLoopback(port, std::chrono::milliseconds(200));
             auto request = "GET /api/v1/events HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer " + token
                            + "\r\nAccept: text/event-stream\r\n\r\n";
-            ::send(m_socket, request.data(), request.size(), 0);
+            testplatform::sendAll(m_socket, request);
         }
 
         ~EventStream()
         {
-            ::close(m_socket);
+            testplatform::closeSocket(m_socket);
         }
 
         // Reads until `text` arrives or `seconds` pass
@@ -558,7 +545,7 @@ namespace
             auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
             while (m_received.find(text) == std::string::npos && std::chrono::steady_clock::now() < deadline) {
                 char buffer[4096];
-                auto n = ::recv(m_socket, buffer, sizeof(buffer), 0);
+                auto n = testplatform::receive(m_socket, buffer, sizeof(buffer));
                 if (n > 0) {
                     m_received.append(buffer, static_cast<size_t>(n));
                 } else if (n == 0) {
@@ -574,7 +561,7 @@ namespace
         }
 
     private:
-        int m_socket = -1;
+        testplatform::Socket m_socket = testplatform::NoSocket;
         std::string m_received;
     };
 } // namespace
@@ -680,7 +667,7 @@ DROGON_TEST(PairingCodesExpireAndStayFew)
     CHECK(claimed == syncserver::UserStore::MaxPairingsPerUser);
     CHECK_THROWS(users.createPairingCode("nobody"));
     if (!dataDir.empty()) {
-        fs::remove_all(dataDir);
+        testplatform::removeAll(dataDir);
     }
 }
 
@@ -867,7 +854,7 @@ DROGON_TEST(ImportsADataDirectoryUnchanged)
     // Running it again changes nothing and says so
     CHECK(!syncserver::importDataDirectory(dir, target, out));
     CHECK(request(Get, "/databases/notes", {frankToken})->getHeader("ETag") == sourceMeta.etag);
-    fs::remove_all(dir);
+    testplatform::removeAll(dir);
 }
 #endif
 
@@ -924,7 +911,7 @@ int main(int argc, char** argv)
 
     app().getLoop()->queueInLoop([] { app().quit(); });
     server.join();
-    fs::remove_all(g_dataDir);
+    testplatform::removeAll(g_dataDir);
 #ifdef SYNC_SERVER_WITH_CLOUD
     if (config.usesPostgres()) {
         OtherInstance cleanup;

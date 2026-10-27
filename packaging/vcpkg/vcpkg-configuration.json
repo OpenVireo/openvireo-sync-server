@@ -1,0 +1,14 @@
+{
+  "$comment": [
+    "ports/ holds Drogon 1.9.14 and Trantor 1.5.29, the versions the Linux builds use (Dockerfile, Dockerfile.static),",
+    "ahead of this baseline: microsoft/vcpkg's ports at the baseline with the new version and SHA512, without drogon's",
+    "0004 (drogon_ctl views, unused) and 0005 (upstream since 1.9.14) patches. Drop them once the baseline has these."
+  ],
+  "default-registry": {
+    "kind": "git",
+    "repository": "https://github.com/microsoft/vcpkg",
+    "baseline": "d90cb72e90dc7ce9a38ee77c4cafa398a4e6a800"
+  },
+  "overlay-ports": ["ports"],
+  "overlay-triplets": ["triplets"]
+}

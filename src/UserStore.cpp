@@ -5,8 +5,14 @@
 #include <json/json.h>
 #include <sqlite3.h>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
+#else
 #include <fcntl.h>
 #include <unistd.h>
+#endif
 
 #include <cstdint>
 #include <stdexcept>
@@ -244,14 +250,24 @@ namespace syncserver
     {
         ensurePrivateDirectory(dataDir);
         const auto file = dataDir / "users.sqlite";
-        // Created first so it is private; SQLite gives its -wal and -shm files the same mode
+        // Created first so it is private; SQLite gives its -wal and -shm files the same mode. On Windows it inherits
+        // the data directory's access control list instead.
+#ifdef _WIN32
+        int fd = ::_wopen(file.c_str(), _O_RDWR | _O_CREAT | _O_BINARY | _O_NOINHERIT, _S_IREAD | _S_IWRITE);
+        if (fd < 0) {
+            throw std::system_error(errno, std::generic_category(), "Cannot open " + file.string());
+        }
+        ::_close(fd);
+#else
         int fd = ::open(file.c_str(), O_RDWR | O_CREAT, 0600);
         if (fd < 0) {
             throw std::system_error(errno, std::generic_category(), "Cannot open " + file.string());
         }
         ::close(fd);
+#endif
 
-        if (sqlite3_open_v2(file.c_str(), &m_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, nullptr) != SQLITE_OK) {
+        // SQLite takes UTF-8 file names everywhere, also on Windows
+        if (sqlite3_open_v2(file.u8string().c_str(), &m_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, nullptr) != SQLITE_OK) {
             std::string error = m_db ? sqlite3_errmsg(m_db) : "out of memory";
             sqlite3_close(m_db);
             throw std::runtime_error("Cannot open " + file.string() + ": " + error);
