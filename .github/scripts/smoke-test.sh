@@ -86,7 +86,8 @@ echo "ok: fetched the JWKS from a server with a publicly trusted certificate"
 
 # A local HTTPS server with a self-signed certificate, which logs every request it gets
 MSYS2_ARG_CONV_EXCL='*' openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 \
-    -addext subjectAltName=IP:127.0.0.1 -keyout "$work/key.pem" -out "$work/cert.pem" 2>/dev/null
+    -addext subjectAltName=IP:127.0.0.1 -keyout "$work/key.pem" -out "$work/cert.pem" 2>"$work/openssl.log" \
+    || fail "openssl couldn't make the test certificate"
 cat >"$work/https.py" <<'EOF'
 import http.server, ssl, sys
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -103,14 +104,24 @@ server = http.server.HTTPServer(("127.0.0.1", 18443), Handler)
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(sys.argv[1], sys.argv[2])
 server.socket = context.wrap_socket(server.socket, server_side=True)
+# The handshake runs in accept(); a client that refuses the certificate without closing mustn't block the next one
+server.socket.settimeout(5)
 server.serve_forever()
 EOF
-"$python" -u "$work/https.py" "$work/cert.pem" "$work/key.pem" >"$work/https.log" 2>&1 &
+"$python" -u "$work/https.py" "$work/cert.pem" "$work/key.pem" >>"$work/https.log" 2>&1 &
 pids+=($!)
-sleep 1
+for _ in $(seq 75); do
+    if curl -sk -o /dev/null https://127.0.0.1:18443/ready; then break; fi
+    sleep 0.2
+done
+curl -sk -o /dev/null https://127.0.0.1:18443/ready || fail "the test HTTPS server didn't start"
+# Only the binary's requests count from here on (the server appends, so emptying the log is safe)
+: >"$work/https.log"
 
 jwks untrusted 18782 https://127.0.0.1:18443/jwks.json
 grep -q "Cannot fetch the JWKS" "$work/untrusted.log" || fail "untrusted: no failed fetch logged"
+# A timeout means the test server never answered, which says nothing about certificate checks
+if grep -q "Cannot fetch the JWKS.*Timeout" "$work/untrusted.log"; then fail "untrusted: timed out instead of refusing the certificate"; fi
 if grep -q "^GET" "$work/https.log"; then fail "untrusted: the request reached a server with a self-signed certificate"; fi
 echo "ok: refused a server with a self-signed certificate"
 
