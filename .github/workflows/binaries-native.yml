@@ -13,6 +13,9 @@
 name: Native binaries
 
 on:
+  # TEMPORARY, removed before merging: workflow_dispatch only finds workflows on the default branch
+  push:
+    branches: [feature/native-binaries]
   workflow_call:
     inputs:
       version:
