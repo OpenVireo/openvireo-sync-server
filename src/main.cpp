@@ -9,7 +9,11 @@
 #endif
 
 #include <drogon/drogon.h>
+#ifdef SYNC_SERVER_PORTABLE
+#include <openssl/crypto.h>
+#endif
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -166,6 +170,18 @@ SYNC_DATA_DIR (default: ./data).)";
 #endif
     }
 } // namespace
+
+#ifdef SYNC_SERVER_PORTABLE
+// The linked-in OpenSSL can't use another build's openssl.cnf: Fedora's names providers and crypto policies it can't
+// load, and then every TLS connection fails. The CA certificates are still read from /etc/ssl. A constructor with a
+// priority, because static initialisers in the libraries already use OpenSSL (and load the config) before main().
+__attribute__((constructor(101))) static void ignoreSystemOpenSslConfig()
+{
+    if (!std::getenv("OPENSSL_CONF")) {
+        OPENSSL_init_crypto(OPENSSL_INIT_NO_LOAD_CONFIG, nullptr);
+    }
+}
+#endif
 
 int main(int argc, char* argv[])
 {

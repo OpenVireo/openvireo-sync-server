@@ -1,0 +1,40 @@
+# systemd unit for the release binary; see docs/install.md. Install with:
+#
+#   sudo install openvireo-sync-server /usr/local/bin/
+#   sudo useradd --system --home-dir /var/lib/openvireo-sync-server --shell /usr/sbin/nologin openvireo-sync
+#   sudo install -m 0644 openvireo-sync-server.service /etc/systemd/system/
+#   sudo systemctl enable --now openvireo-sync-server
+#
+# Settings go in /etc/openvireo-sync-server.env (see docs/configuration.md). Data lives in /var/lib/openvireo-sync-server.
+
+[Unit]
+Description=OpenVireo sync server
+Documentation=https://openvireo.com/docs/sync-server/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/openvireo-sync-server
+EnvironmentFile=-/etc/openvireo-sync-server.env
+Environment=SYNC_DATA_DIR=/var/lib/openvireo-sync-server
+User=openvireo-sync
+Group=openvireo-sync
+StateDirectory=openvireo-sync-server
+StateDirectoryMode=0700
+# Drogon keeps request bodies in ./uploads while they arrive
+WorkingDirectory=/var/lib/openvireo-sync-server
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

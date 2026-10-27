@@ -3,8 +3,9 @@
 #   git tag v1.2.3 && git push origin v1.2.3
 #
 # publishes ghcr.io/openvireo/openvireo-sync-server:1.2.3, :1.2, :1 and :latest (a pre-release such as v1.3.0-rc.1
-# gets only its own tag), then creates the GitHub release. The API tests run first and a failure stops the release. Each architecture builds on
-# its own native runner, since compiling Drogon under emulation takes far too long.
+# gets only its own tag), then creates the GitHub release with statically linked binaries for Linux x64 and arm64
+# (Dockerfile.static) and their SHA256SUMS. The API tests run first, also against the static build, and a failure stops
+# the release. Each architecture builds on its own native runner, since compiling Drogon under emulation takes far too long.
 
 name: Release
 
@@ -145,20 +146,79 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
 
+  # The static binary: the API tests run against it inside the build, then it's packed with the docs and systemd unit
+  binaries:
+    needs: test
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Name the version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="sha-${GITHUB_SHA::7}"; fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - name: Run the API tests against the static build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.static
+          target: test
+          cache-from: type=gha,scope=static-linux-${{ matrix.arch }}
+          cache-to: type=gha,scope=static-linux-${{ matrix.arch }},mode=max
+      - name: Build the archive
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.static
+          build-args: VERSION=${{ env.VERSION }}
+          outputs: type=local,dest=dist
+          cache-from: type=gha,scope=static-linux-${{ matrix.arch }}
+      - name: Run it on another distribution
+        run: |
+          tar -xzf dist/*.tar.gz -C "$RUNNER_TEMP"
+          docker run --rm -v "$RUNNER_TEMP/openvireo-sync-server-$VERSION:/x:ro" -w /tmp fedora:41 \
+            sh -c '/x/openvireo-sync-server & sleep 2; curl -fsS http://127.0.0.1:8787/api/v1/health'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-linux-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
   # The GitHub release, with notes generated from the changes since the previous tag
   release:
-    needs: merge
+    needs: [merge, binaries]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - name: Create the release
+      - uses: actions/download-artifact@v4
+        with:
+          path: binaries
+          pattern: binary-*
+          merge-multiple: true
+      - name: Checksums
+        working-directory: binaries
+        run: sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
+      - name: Create the release, or replace the binaries on a re-run
         run: |
           version="${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" binaries/* --repo "$GITHUB_REPOSITORY" --clobber
+            exit 0
+          fi
           args=(--repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --verify-tag --generate-notes)
           if [[ "$version" == *-* ]]; then args+=(--prerelease); fi
-          printf '```sh\ndocker pull %s:%s\n```\n' "$IMAGE" "$version" > notes.md
-          gh release create "$GITHUB_REF_NAME" "${args[@]}" --notes-file notes.md
+          printf '```sh\ndocker pull %s:%s\n```\n\nOr the static Linux binary (x64, arm64), with a systemd unit; see docs/install.md:\n\n```sh\ncurl -LO https://github.com/%s/releases/download/%s/openvireo-sync-server-%s-linux-x64.tar.gz\n```\n' \
+            "$IMAGE" "$version" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$version" > notes.md
+          gh release create "$GITHUB_REF_NAME" "${args[@]}" --notes-file notes.md binaries/*
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
