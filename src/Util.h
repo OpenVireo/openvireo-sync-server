@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <ctime>
 #include <deque>
 #include <filesystem>
 #include <mutex>
@@ -20,11 +21,14 @@ namespace syncserver
     std::string isoTimestamp(std::chrono::system_clock::time_point time = std::chrono::system_clock::now());
     // RFC 9110 IMF-fixdate for an ISO timestamp produced by isoTimestamp()
     std::string httpDateFromIso(const std::string& iso);
+    // gmtime_r and timegm, which Windows calls gmtime_s and _mkgmtime
+    std::tm utcTime(std::time_t time);
+    std::time_t fromUtcTime(std::tm tm);
 
     std::string readFile(const std::filesystem::path& file);
-    // Writes to a temporary file (mode 0600) and renames it over `file`, so readers never see a partial file
+    // Writes to a temporary file (mode 0600 on POSIX) and renames it over `file`, so readers never see a partial file
     void atomicWriteFile(const std::filesystem::path& file, std::string_view contents);
-    // Creates the directory and any missing parents with mode 0700
+    // Creates the directory and any missing parents with mode 0700 (on Windows they inherit the parent's ACL)
     void ensurePrivateDirectory(const std::filesystem::path& dir);
 
     /**

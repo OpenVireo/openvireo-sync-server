@@ -7,14 +7,21 @@
 #include <cerrno>
 #include <cstring>
 #include <ctime>
-#include <fcntl.h>
 #include <fstream>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
-#include <unistd.h>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+
+#include <process.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -54,8 +61,7 @@ namespace syncserver
         using namespace std::chrono;
         auto ms = duration_cast<milliseconds>(time.time_since_epoch()).count();
         std::time_t seconds = ms / 1000;
-        std::tm tm{};
-        gmtime_r(&seconds, &tm);
+        auto tm = utcTime(seconds);
         char buf[32];
         std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
         char out[40];
@@ -79,8 +85,7 @@ namespace syncserver
         }
         tm.tm_year -= 1900;
         tm.tm_mon -= 1;
-        std::time_t seconds = timegm(&tm);
-        gmtime_r(&seconds, &tm);
+        tm = utcTime(fromUtcTime(tm));
         static const char* days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
         static const char* months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
@@ -98,6 +103,124 @@ namespace syncserver
         return out;
     }
 
+    std::tm utcTime(std::time_t time)
+    {
+        std::tm tm{};
+#ifdef _WIN32
+        gmtime_s(&tm, &time);
+#else
+        gmtime_r(&time, &tm);
+#endif
+        return tm;
+    }
+
+    std::time_t fromUtcTime(std::tm tm)
+    {
+#ifdef _WIN32
+        return _mkgmtime(&tm);
+#else
+        return timegm(&tm);
+#endif
+    }
+
+#ifdef _WIN32
+    namespace
+    {
+        [[noreturn]] void throwLastError(const std::string& what)
+        {
+            throw std::system_error(static_cast<int>(::GetLastError()), std::system_category(), what);
+        }
+
+        // Closes a Windows file handle when it goes out of scope
+        struct Handle
+        {
+            HANDLE handle;
+            ~Handle()
+            {
+                if (handle != INVALID_HANDLE_VALUE) {
+                    ::CloseHandle(handle);
+                }
+            }
+        };
+    } // namespace
+
+    // Shares delete access, unlike std::ifstream, so that atomicWriteFile can replace a file while it's being read,
+    // as rename() can on POSIX
+    std::string readFile(const fs::path& file)
+    {
+        Handle in{::CreateFileW(file.c_str(),
+                                GENERIC_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                nullptr,
+                                OPEN_EXISTING,
+                                FILE_ATTRIBUTE_NORMAL,
+                                nullptr)};
+        if (in.handle == INVALID_HANDLE_VALUE) {
+            throwLastError("Cannot read " + file.string());
+        }
+        std::string contents;
+        char buffer[65536];
+        DWORD read = 0;
+        do {
+            if (!::ReadFile(in.handle, buffer, sizeof(buffer), &read, nullptr)) {
+                throwLastError("Cannot read " + file.string());
+            }
+            contents.append(buffer, read);
+        } while (read > 0);
+        return contents;
+    }
+
+    // The temporary file inherits the directory's permissions (see ensurePrivateDirectory). MoveFileEx with
+    // MOVEFILE_REPLACE_EXISTING replaces the target in one step, like rename() on POSIX; it fails while another
+    // program holds the target open without sharing delete access (e.g. a virus scanner), so it's retried briefly.
+    void atomicWriteFile(const fs::path& file, std::string_view contents)
+    {
+        auto tmp = file;
+        tmp += "." + std::to_string(::_getpid()) + "." + drogon::utils::secureRandomString(8) + ".tmp";
+        {
+            Handle out{::CreateFileW(
+                tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr)};
+            if (out.handle == INVALID_HANDLE_VALUE) {
+                throwLastError("Cannot create " + tmp.string());
+            }
+            const char* ptr = contents.data();
+            size_t remaining = contents.size();
+            while (remaining > 0) {
+                DWORD written = 0;
+                const auto chunk = static_cast<DWORD>(std::min<size_t>(remaining, 1u << 30));
+                if (!::WriteFile(out.handle, ptr, chunk, &written, nullptr)) {
+                    auto err = ::GetLastError();
+                    ::CloseHandle(out.handle);
+                    out.handle = INVALID_HANDLE_VALUE;
+                    ::DeleteFileW(tmp.c_str());
+                    throw std::system_error(static_cast<int>(err), std::system_category(), "Cannot write " + tmp.string());
+                }
+                ptr += written;
+                remaining -= written;
+            }
+        }
+
+        for (int attempt = 1;; ++attempt) {
+            if (::MoveFileExW(tmp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+                return;
+            }
+            auto err = ::GetLastError();
+            if ((err == ERROR_ACCESS_DENIED || err == ERROR_SHARING_VIOLATION) && attempt < 50) {
+                ::Sleep(10);
+                continue;
+            }
+            ::DeleteFileW(tmp.c_str());
+            throw std::system_error(static_cast<int>(err), std::system_category(), "Cannot replace " + file.string());
+        }
+    }
+
+    // POSIX modes don't apply: the directory inherits its parent's access control list, so the data directory
+    // belongs somewhere only the server's account can read (see docs/install.md)
+    void ensurePrivateDirectory(const fs::path& dir)
+    {
+        fs::create_directories(dir);
+    }
+#else
     std::string readFile(const fs::path& file)
     {
         std::ifstream in(file, std::ios::binary);
@@ -150,6 +273,7 @@ namespace syncserver
             fs::permissions(dir, fs::perms::owner_all, fs::perm_options::replace);
         }
     }
+#endif
 
     FailureLimiter::FailureLimiter(std::size_t perKey, std::size_t total, std::chrono::seconds window)
         : m_perKey(perKey)

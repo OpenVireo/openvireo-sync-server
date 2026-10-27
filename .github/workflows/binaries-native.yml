@@ -1,0 +1,188 @@
+# Self-contained sync server binaries for macOS (arm64, x64) and Windows (x64), built with vcpkg's static libraries
+# (packaging/vcpkg) and tested on their own runners. Each one is packed like the Linux binary (Dockerfile.static):
+#
+#   openvireo-sync-server-<version>-darwin-arm64.tar.gz
+#   openvireo-sync-server-<version>-darwin-x64.tar.gz
+#   openvireo-sync-server-<version>-windows-x64.zip
+#
+# and uploaded as the artifact binary-<os>-<arch>, which release.yml attaches to the GitHub release. This workflow
+# publishes nothing itself, so it can be started on any branch:
+#
+#   gh workflow run binaries-native.yml --ref <branch>
+
+name: Native binaries
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version in the archive names; default the tag without its v, or sha-<commit>
+        type: string
+        required: false
+        default: ""
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version in the archive names; default the tag without its v, or sha-<commit>
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  # The vcpkg tool and scripts; the ports come from the baseline in packaging/vcpkg/vcpkg-configuration.json
+  VCPKG_COMMIT: d90cb72e90dc7ce9a38ee77c4cafa398a4e6a800
+  # Keep in step with VCPKG_OSX_DEPLOYMENT_TARGET in packaging/vcpkg/triplets and docs/install.md
+  MACOSX_DEPLOYMENT_TARGET: "12.0"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: darwin
+            arch: arm64
+            runner: macos-15
+            triplet: arm64-osx-release-static
+          - os: darwin
+            arch: x64
+            runner: macos-15-intel
+            triplet: x64-osx-release-static
+          - os: windows
+            arch: x64
+            runner: windows-2025
+            triplet: x64-windows-release-static
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Name the version
+        run: |
+          v="$INPUT_VERSION"
+          if [[ -z "$v" && "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; fi
+          if [[ -z "$v" ]]; then v="sha-${GITHUB_SHA::7}"; fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "PACKAGE=openvireo-sync-server-$v" >> "$GITHUB_ENV"
+          # vcpkg and CMake want C:/... rather than C:\... or /c/...
+          tmp="$RUNNER_TEMP"
+          if [[ "$RUNNER_OS" == Windows ]]; then tmp="$(cygpath -m "$RUNNER_TEMP")"; fi
+          echo "VCPKG_ROOT=$tmp/vcpkg" >> "$GITHUB_ENV"
+          # Built packages, cached below
+          echo "VCPKG_BINARY_SOURCES=clear;files,$tmp/vcpkg-cache,readwrite" >> "$GITHUB_ENV"
+          mkdir -p "$tmp/vcpkg-cache"
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+
+      # vcpkg's Meson (for libpq) needs Python 3.10 or later
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up vcpkg
+        run: |
+          git init -q "$VCPKG_ROOT"
+          git -C "$VCPKG_ROOT" fetch -q --depth 1 https://github.com/microsoft/vcpkg "$VCPKG_COMMIT"
+          git -C "$VCPKG_ROOT" checkout -q FETCH_HEAD
+          if [[ "$RUNNER_OS" == Windows ]]; then "$VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics; else "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics; fi
+
+      # Built packages, so only a change of the ports, triplets or vcpkg rebuilds Drogon, OpenSSL and libpq
+      - name: Restore the vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg-cache
+          key: vcpkg-${{ matrix.triplet }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('packaging/vcpkg/**') }}-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-${{ matrix.triplet }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('packaging/vcpkg/**') }}-
+            vcpkg-${{ matrix.triplet }}-
+
+      - name: Configure
+        id: configure
+        run: |
+          args=(-DCMAKE_BUILD_TYPE=Release
+                -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+                -DVCPKG_MANIFEST_DIR="$GITHUB_WORKSPACE/packaging/vcpkg"
+                -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+                -DVCPKG_INSTALL_OPTIONS=--clean-after-build
+                -DSYNC_SERVER_WITH_CLOUD=ON
+                -DSYNC_SERVER_PORTABLE=ON)
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            # Homebrew's libraries mustn't end up in the binary
+            args+=(-DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" "-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local")
+          else
+            # The C++ runtime linked in (/MT), like the vcpkg triplet's libraries
+            args+=(-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded)
+          fi
+          before=$(find "$VCPKG_ROOT/../vcpkg-cache" -type f | wc -l)
+          cmake -S . -B build "${args[@]}"
+          if [[ "$(find "$VCPKG_ROOT/../vcpkg-cache" -type f | wc -l)" != "$before" ]]; then echo "VCPKG_BUILT=1" >> "$GITHUB_ENV"; fi
+
+      # Only when vcpkg built something, and also after a failed configure, which keeps what was built before it failed
+      - name: Save the vcpkg packages
+        if: always() && (env.VCPKG_BUILT == '1' || steps.configure.outcome == 'failure')
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg-cache
+          key: vcpkg-${{ matrix.triplet }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('packaging/vcpkg/**') }}-${{ github.run_id }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Run the tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Install
+        run: cmake --install build --config Release --prefix out $([[ "$RUNNER_OS" == macOS ]] && echo --strip)
+
+      - name: Check that the binary needs only system libraries
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            bin=out/bin/openvireo-sync-server
+            otool -L "$bin"
+            if otool -L "$bin" | tail -n +2 | grep -vE '^\s+(/usr/lib/|/System/Library/)'; then
+              echo "::error::links a library outside the system" && exit 1
+            fi
+            vtool -show-build "$bin"
+          else
+            bin=out/bin/openvireo-sync-server.exe
+            dumpbin="$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' \
+              -find 'VC/Tools/MSVC/**/bin/Hostx64/x64/dumpbin.exe' | head -n 1 | tr -d '\r')"
+            "$dumpbin" -nologo -dependents "$bin" | tee dependents.txt
+            if grep -iE 'vcruntime|msvcp|ucrtbase|api-ms-win-crt|ssl|crypto|libpq|sqlite|zlib|brotli|cares|jsoncpp|drogon|trantor' dependents.txt; then
+              echo "::error::links a DLL that isn't part of Windows" && exit 1
+            fi
+          fi
+
+      # Signing goes here (code signing is added separately): sign out/bin/openvireo-sync-server (macOS: Developer ID
+      # with the hardened runtime, then notarize) or out/bin/openvireo-sync-server.exe (Windows: Azure Artifact
+      # Signing) in place. Everything below packs and tests whatever is in out/bin, so a signed binary flows through.
+
+      - name: Package
+        run: |
+          mkdir -p "pkg/$PACKAGE" dist
+          cp out/bin/* LICENSE README.md "pkg/$PACKAGE/"
+          cp -R docs "pkg/$PACKAGE/docs"
+          name="$PACKAGE-${{ matrix.os }}-${{ matrix.arch }}"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            (cd pkg && python -m zipfile -c "../dist/$name.zip" "$PACKAGE")
+          else
+            tar -C pkg -czf "dist/$name.tar.gz" "$PACKAGE"
+          fi
+          ls -l dist out/bin
+
+      - name: Run the packaged binary
+        run: .github/scripts/smoke-test.sh dist/*
+        env:
+          PYTHON: python
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error

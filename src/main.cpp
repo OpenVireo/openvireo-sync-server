@@ -13,6 +13,7 @@
 #include <openssl/crypto.h>
 #endif
 
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -173,14 +174,29 @@ SYNC_DATA_DIR (default: ./data).)";
 
 #ifdef SYNC_SERVER_PORTABLE
 // The linked-in OpenSSL can't use another build's openssl.cnf: Fedora's names providers and crypto policies it can't
-// load, and then every TLS connection fails. The CA certificates are still read from /etc/ssl. A constructor with a
-// priority, because static initialisers in the libraries already use OpenSSL (and load the config) before main().
-__attribute__((constructor(101))) static void ignoreSystemOpenSslConfig()
+// load, and then every TLS connection fails. macOS's /etc/ssl/openssl.cnf is LibreSSL's, and on Windows the built-in
+// OPENSSLDIR is a directory of the build machine. The CA certificates are still read from /etc/ssl on Linux and macOS,
+// and from the system certificate store on Windows. Run before main(), because static initialisers in the libraries already use
+// OpenSSL (and load the config): a constructor with a priority, or on Windows an entry in the C runtime's table of
+// initialisers ahead of the C++ ones (.CRT$XCU).
+static void ignoreSystemOpenSslConfig()
 {
     if (!std::getenv("OPENSSL_CONF")) {
         OPENSSL_init_crypto(OPENSSL_INIT_NO_LOAD_CONFIG, nullptr);
     }
 }
+#ifdef _MSC_VER
+#pragma section(".CRT$XCT", read)
+// External and named to the linker, so that neither the compiler nor the linker drops the unreferenced entry
+extern "C" __declspec(allocate(".CRT$XCT")) void(__cdecl* const syncServerIgnoreOpenSslConfig)() =
+    ignoreSystemOpenSslConfig;
+#pragma comment(linker, "/include:syncServerIgnoreOpenSslConfig")
+#else
+__attribute__((constructor(101))) static void ignoreSystemOpenSslConfigEarly()
+{
+    ignoreSystemOpenSslConfig();
+}
+#endif
 #endif
 
 int main(int argc, char* argv[])
@@ -224,6 +240,14 @@ int main(int argc, char* argv[])
         }
 #endif
         syncserver::registerSyncApi(config, std::move(storage));
+        // Each message at once, also when stdout is a file or pipe (systemd, Docker, launchd, a Windows service
+        // wrapper), rather than when the buffer fills
+        trantor::Logger::setOutputFunction(
+            [](const char* message, uint64_t length) {
+                std::fwrite(message, 1, static_cast<size_t>(length), stdout);
+                std::fflush(stdout);
+            },
+            [] { std::fflush(stdout); });
         drogon::app()
             .setLogLevel(trantor::Logger::kWarn)
             .setThreadNum(config.threads)

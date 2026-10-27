@@ -31,10 +31,7 @@
 #include <sstream>
 #include <thread>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include "TestPlatform.h"
 
 using namespace drogon;
 namespace fs = std::filesystem;
@@ -272,24 +269,15 @@ namespace
         explicit EventStream(const std::string& token)
         {
             auto port = std::stoi(g_baseUrl.substr(g_baseUrl.rfind(':') + 1));
-            m_socket = ::socket(AF_INET, SOCK_STREAM, 0);
-            sockaddr_in address{};
-            address.sin_family = AF_INET;
-            address.sin_port = htons(static_cast<uint16_t>(port));
-            address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-            if (::connect(m_socket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-                throw std::runtime_error("cannot connect");
-            }
-            timeval timeout{0, 200 * 1000};
-            ::setsockopt(m_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+            m_socket = testplatform::connectLoopback(port, std::chrono::milliseconds(200));
             auto request = "GET /api/v1/events HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer " + token
                            + "\r\nAccept: text/event-stream\r\n\r\n";
-            ::send(m_socket, request.data(), request.size(), 0);
+            testplatform::sendAll(m_socket, request);
         }
 
         ~EventStream()
         {
-            ::close(m_socket);
+            testplatform::closeSocket(m_socket);
         }
 
         // Reads until `text` arrives or `seconds` pass
@@ -298,7 +286,7 @@ namespace
             auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
             while (m_received.find(text) == std::string::npos && std::chrono::steady_clock::now() < deadline) {
                 char buffer[4096];
-                auto n = ::recv(m_socket, buffer, sizeof(buffer), 0);
+                auto n = testplatform::receive(m_socket, buffer, sizeof(buffer));
                 if (n > 0) {
                     m_received.append(buffer, static_cast<size_t>(n));
                 } else if (n == 0) {
@@ -321,7 +309,7 @@ namespace
         }
 
     private:
-        int m_socket = -1;
+        testplatform::Socket m_socket = testplatform::NoSocket;
         bool m_closed = false;
         std::string m_received;
     };
@@ -1070,7 +1058,7 @@ int main(int argc, char** argv)
 
     app().getLoop()->queueInLoop([] { app().quit(); });
     server.join();
-    fs::remove_all(dataDir);
+    testplatform::removeAll(dataDir);
 #ifdef SYNC_SERVER_WITH_CLOUD
     if (config.usesPostgres()) {
         syncserver::Postgres postgres(config);

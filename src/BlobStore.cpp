@@ -103,7 +103,7 @@ namespace syncserver
             }
             tm.tm_year -= 1900;
             tm.tm_mon -= 1;
-            return std::chrono::system_clock::from_time_t(timegm(&tm));
+            return std::chrono::system_clock::from_time_t(fromUtcTime(tm));
         }
     } // namespace
 
@@ -189,8 +189,7 @@ namespace syncserver
             char amzDate[17];
             char date[9];
             auto now = std::time(nullptr);
-            std::tm tm{};
-            gmtime_r(&now, &tm);
+            const auto tm = utcTime(now);
             std::strftime(amzDate, sizeof(amzDate), "%Y%m%dT%H%M%SZ", &tm);
             std::strftime(date, sizeof(date), "%Y%m%d", &tm);
 
