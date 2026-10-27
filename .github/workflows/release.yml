@@ -197,6 +197,8 @@ jobs:
     needs: [merge, binaries]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
+    # GPG_PRIVATE_KEY lives in this environment, which only allows v* tags (.github/RELEASE-SIGNING.md)
+    environment: signing
     permissions:
       contents: write
     steps:
@@ -208,6 +210,24 @@ jobs:
       - name: Checksums
         working-directory: binaries
         run: sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
+      - name: Sign the checksums
+        working-directory: binaries
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          # The OpenVireo release key (primary key); the secret holds its signing subkey
+          RELEASE_KEY: 23F6403E9392E946475E7FD3B55683A43E98C11C
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "::error::GPG_PRIVATE_KEY is not set in the signing environment; see .github/RELEASE-SIGNING.md"
+            exit 1
+          fi
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --batch --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
+          # VALIDSIG's last field is the primary key of the subkey that signed
+          primary=$(gpg --batch --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>/dev/null | awk '$2 == "VALIDSIG" { print $NF }')
+          if [ "$primary" != "$RELEASE_KEY" ]; then
+            echo "::error::SHA256SUMS.asc is signed by a key of $primary, not the release key $RELEASE_KEY"; exit 1
+          fi
       - name: Create the release, or replace the binaries on a re-run
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -217,7 +237,7 @@ jobs:
           fi
           args=(--repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --verify-tag --generate-notes)
           if [[ "$version" == *-* ]]; then args+=(--prerelease); fi
-          printf '```sh\ndocker pull %s:%s\n```\n\nOr the static Linux binary (x64, arm64), with a systemd unit; see docs/install.md:\n\n```sh\ncurl -LO https://github.com/%s/releases/download/%s/openvireo-sync-server-%s-linux-x64.tar.gz\n```\n' \
+          printf '```sh\ndocker pull %s:%s\n```\n\nOr the static Linux binary (x64, arm64), with a systemd unit; see docs/install.md:\n\n```sh\ncurl -LO https://github.com/%s/releases/download/%s/openvireo-sync-server-%s-linux-x64.tar.gz\n```\n\n`SHA256SUMS.asc` is a GPG signature of `SHA256SUMS` by the [OpenVireo release key](https://openvireo.com/verifying-signatures) (`23F6 403E 9392 E946 475E 7FD3 B556 83A4 3E98 C11C`).\n' \
             "$IMAGE" "$version" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$version" > notes.md
           gh release create "$GITHUB_REF_NAME" "${args[@]}" --notes-file notes.md binaries/*
         env:

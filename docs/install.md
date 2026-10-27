@@ -10,9 +10,21 @@ Postgres and S3 support:
 v=VERSION a=x64     # VERSION: the release without the v, e.g. 0.2.0; a: x64 or arm64
 curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/openvireo-sync-server-$v-linux-$a.tar.gz"
 curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/SHA256SUMS"
+curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/SHA256SUMS.asc"
+gpg --verify SHA256SUMS.asc SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS
 tar -xzf "openvireo-sync-server-$v-linux-$a.tar.gz" && cd "openvireo-sync-server-$v"
 sudo install openvireo-sync-server /usr/local/bin/
+```
+
+`SHA256SUMS.asc` is signed with the OpenVireo release key, the same one as the desktop app's releases:
+fingerprint `23F6 403E 9392 E946 475E 7FD3 B556 83A4 3E98 C11C`. Import it once, then `gpg --verify` must
+say "Good signature" with that primary key fingerprint (see
+[Verifying Signatures](https://openvireo.com/verifying-signatures)):
+
+```sh
+curl -sSL https://openvireo.com/openvireo-release.asc | gpg --import
+# or: gpg --keyserver hkps://keys.openpgp.org --recv-keys 23F6403E9392E946475E7FD3B55683A43E98C11C
 ```
 
 The archive also has the docs and a systemd unit, `openvireo-sync-server.service`, which runs the server as
