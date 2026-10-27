@@ -19,8 +19,8 @@ server and in the clients.
 | `both` | either; a token with two `.` is an access token | all of the above |
 
 Routes a mode doesn't have answer `404`. In `both` mode, an access token on a legacy route, or a device token
-on a vault route, gets `403`. `both` is what the hosted service runs, so people who started with device
-tokens can move to an account without losing their databases (see [below](#moving-a-database-into-a-vault)).
+on a vault route, gets `403`. The hosted service runs `jwt`. `both` is for a server that already has device
+token users who need to move their databases into account vaults (see [below](#moving-a-database-into-a-vault)).
 
 ## Settings
 
@@ -31,10 +31,10 @@ tokens can move to an account without losing their databases (see [below](#movin
 | `SYNC_AUTH_AUDIENCE` | `ov-sync` | The audience every token's `aud` must contain |
 | `SYNC_INTERNAL_TOKEN` | *(none)* | Shared secret the account server uses for the [internal routes](api.md#internal-routes). Unset: those routes are off (`404`) |
 
-For the hosted setup:
+For the hosted setup (use `both` instead while device token users still have databases to move):
 
 ```sh
-SYNC_AUTH_MODE=both \
+SYNC_AUTH_MODE=jwt \
 SYNC_AUTH_JWKS_URL=https://accounts.example.org/.well-known/jwks.json \
 SYNC_AUTH_ISSUER=https://accounts.example.org \
 SYNC_INTERNAL_TOKEN=<random secret shared with the account server> \
