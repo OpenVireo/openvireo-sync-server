@@ -68,10 +68,15 @@ tar -xzf "openvireo-sync-server-$v-darwin-$a.tar.gz" && cd "openvireo-sync-serve
 ./openvireo-sync-server                # http://127.0.0.1:8787, data in ./data
 ```
 
-The binary isn't signed with an Apple Developer ID yet. Downloaded with `curl` it runs as is; downloaded with a
-browser, macOS blocks it ("cannot be opened because the developer cannot be verified") until you remove the
-quarantine attribute: `xattr -d com.apple.quarantine openvireo-sync-server`. It uses only libraries that are
-part of macOS.
+The binary is signed with OpenVireo's Developer ID (team `DP5U2UP42V`) and notarized by Apple, so it runs even
+when downloaded with a browser. A bare executable can't carry its notarization ticket, so macOS checks it online
+the first time. It uses only libraries that are part of macOS. To check the signature by hand:
+
+```sh
+codesign --verify --strict --verbose=2 openvireo-sync-server   # valid on disk, satisfies its Designated Requirement
+codesign -dv openvireo-sync-server 2>&1 | grep TeamIdentifier  # TeamIdentifier=DP5U2UP42V
+spctl --assess --type install -vv openvireo-sync-server         # accepted, source=Notarized Developer ID
+```
 
 For HTTPS connections it trusts the CA certificates in `/etc/ssl/cert.pem`, the bundle macOS ships and updates
 with the system. Certificates you added to the Keychain are not used: for a private CA (say, of your own account
@@ -96,8 +101,14 @@ Expand-Archive "openvireo-sync-server-$v-windows-x64.zip" . ; cd "openvireo-sync
 .\openvireo-sync-server.exe           # http://127.0.0.1:8787, data in .\data
 ```
 
-The binary isn't code signed yet, so SmartScreen may warn when you start a downloaded copy from Explorer
-(**More info → Run anyway**). Windows Firewall asks for permission only if you make it listen on the network
+The binary is signed with Azure Artifact Signing, the same publisher as the OpenVireo desktop app's installers,
+so SmartScreen knows its publisher. To check the signature by hand (`Status` must be `Valid`):
+
+```powershell
+Get-AuthenticodeSignature .\openvireo-sync-server.exe | Format-List Status, SignerCertificate, TimeStamperCertificate
+```
+
+Windows Firewall asks for permission only if you make it listen on the network
 (`SYNC_HOST`). It needs no runtime or DLLs beyond Windows itself.
 
 Windows has no file modes: the files in the data directory inherit the directory's access control list, so keep
@@ -114,8 +125,8 @@ logged-in user, wrap it with a service wrapper such as [WinSW](https://github.co
 ### All platforms
 
 The binary ignores the system's `openssl.cnf`, which belongs to another OpenSSL (the distribution's, macOS's
-LibreSSL); set `OPENSSL_CONF` to use one anyway. The macOS and Windows binaries are built by
-`.github/workflows/binaries-native.yml`; see [From source](#from-source) to build one yourself.
+LibreSSL); set `OPENSSL_CONF` to use one anyway. The macOS and Windows binaries are built and signed by
+`.github/workflows/binaries-native.yml` (see `.github/RELEASE-SIGNING.md`); see [From source](#from-source) to build one yourself.
 
 ## From source
 
