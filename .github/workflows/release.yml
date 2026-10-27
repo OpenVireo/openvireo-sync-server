@@ -193,10 +193,15 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
-  # macOS and Windows, built and tested on their own runners; the artifacts are named binary-<os>-<arch> like the above
+  # macOS and Windows, built, signed and tested on their own runners; the artifacts are named binary-<os>-<arch> like the
+  # above. Signing runs in the called job's `signing` environment, which needs the secrets passed on and an OIDC token.
   binaries-native:
     needs: test
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/binaries-native.yml
+    secrets: inherit
 
   # The GitHub release, with notes generated from the changes since the previous tag
   release:
@@ -243,7 +248,7 @@ jobs:
           fi
           args=(--repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --verify-tag --generate-notes)
           if [[ "$version" == *-* ]]; then args+=(--prerelease); fi
-          printf '```sh\ndocker pull %s:%s\n```\n\nOr a single binary, see docs/install.md: Linux (x64, arm64; statically linked, with a systemd unit), macOS (Apple silicon arm64, Intel x64) and Windows (x64). The macOS and Windows binaries are not code signed yet.\n\n```sh\ncurl -LO https://github.com/%s/releases/download/%s/openvireo-sync-server-%s-linux-x64.tar.gz\n```\n\n`SHA256SUMS.asc` is a GPG signature of `SHA256SUMS` by the [OpenVireo release key](https://openvireo.com/verifying-signatures) (`23F6 403E 9392 E946 475E 7FD3 B556 83A4 3E98 C11C`).\n' \
+          printf '```sh\ndocker pull %s:%s\n```\n\nOr a single binary, see docs/install.md: Linux (x64, arm64; statically linked, with a systemd unit), macOS (Apple silicon arm64, Intel x64; signed with a Developer ID and notarized) and Windows (x64; signed with Azure Artifact Signing).\n\n```sh\ncurl -LO https://github.com/%s/releases/download/%s/openvireo-sync-server-%s-linux-x64.tar.gz\n```\n\n`SHA256SUMS.asc` is a GPG signature of `SHA256SUMS` by the [OpenVireo release key](https://openvireo.com/verifying-signatures) (`23F6 403E 9392 E946 475E 7FD3 B556 83A4 3E98 C11C`).\n' \
             "$IMAGE" "$version" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$version" > notes.md
           gh release create "$GITHUB_REF_NAME" "${args[@]}" --notes-file notes.md binaries/*
         env:
