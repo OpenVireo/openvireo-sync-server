@@ -14,13 +14,13 @@ needs nothing installed, with Postgres and S3 support, for:
 Each archive has a directory `openvireo-sync-server-VERSION` with the binary, the licence, the README and these
 docs. `SHA256SUMS` on the release lists their checksums, and `SHA256SUMS.asc` is its signature with the OpenVireo
 release key, the same one as the desktop app's releases: fingerprint
-`23F6 403E 9392 E946 475E 7FD3 B556 83A4 3E98 C11C`. Import it once, then `gpg --verify SHA256SUMS.asc SHA256SUMS`
+`FE27 78BF 0747 05E0 994B BAF9 FEBA 3556 2DE1 04CB`. Import it once, then `gpg --verify SHA256SUMS.asc SHA256SUMS`
 must say "Good signature" with that primary key fingerprint (see
 [Verifying Signatures](https://openvireo.com/verifying-signatures)):
 
 ```sh
 curl -sSL https://openvireo.com/openvireo-release.asc | gpg --import
-# or: gpg --keyserver hkps://keys.openpgp.org --recv-keys 23F6403E9392E946475E7FD3B55683A43E98C11C
+# or: gpg --keyserver hkps://keys.openpgp.org --recv-keys FE2778BF074705E0994BBAF9FEBA35562DE104CB
 ```
  For an always-on server, Linux (with the systemd unit
 below) or [Docker](#docker) is the best supported; on macOS and Windows the binary is as good for a server that

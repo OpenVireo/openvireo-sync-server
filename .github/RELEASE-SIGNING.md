@@ -15,7 +15,7 @@ there); only the secrets have to be set again here, since secret values can't be
 `SHA256SUMS` all have the signed file. After the smoke test it checks the signature in the archive:
 `codesign --verify --strict`, a Developer ID with the hardened runtime, and `spctl --assess --type install`
 reporting `source=Notarized Developer ID`; on Windows `Get-AuthenticodeSignature` must be `Valid`. The `release` job
-checks that `SHA256SUMS.asc` comes from a subkey of the release key `23F6 403E 9392 E946 475E 7FD3 B556 83A4 3E98 C11C`.
+checks that `SHA256SUMS.asc` comes from a subkey of the release key `FE27 78BF 0747 05E0 994B BAF9 FEBA 3556 2DE1 04CB`.
 
 The server is native code and needs none of the hardened runtime's exceptions, so it is signed without
 entitlements; the full smoke test (HTTPS with the statically linked OpenSSL) passes on a hardened build.
