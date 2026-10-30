@@ -9,17 +9,32 @@ The server only ever sees the **encrypted** `.kdbx` file. OpenVireo downloads it
 
 ## Quick start
 
-The server is written in C++17 on [Drogon](https://github.com/drogonframework/drogon).
+Download the server from the [releases](https://github.com/OpenVireo/openvireo-sync-server/releases): one signed
+binary that needs nothing else installed, for Linux (x64, arm64), macOS (Apple silicon, Intel) and Windows (x64).
+On Linux, for example:
+
+```sh
+v=VERSION a=x64     # VERSION: the release without the v, e.g. 0.2.0; a: x64 or arm64
+curl -fLO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/openvireo-sync-server-$v-linux-$a.tar.gz"
+tar -xzf "openvireo-sync-server-$v-linux-$a.tar.gz" && cd "openvireo-sync-server-$v"
+./openvireo-sync-server users add alice laptop   # prints laptop's access token, shown only once
+./openvireo-sync-server                          # http://127.0.0.1:8787
+```
+
+See [Release binary](docs/install.md#release-binary) for macOS and Windows, checking the signatures and a systemd unit.
+
+To build from source, with C++17 and [Drogon](https://github.com/drogonframework/drogon) (more in
+[From source](docs/install.md#from-source)):
 
 ```sh
 brew install drogon sqlite     # or: apt install libdrogon-dev libsqlite3-dev, vcpkg install drogon sqlite3, …
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/openvireo-sync-server users add alice laptop   # prints laptop's access token, shown only once
-./build/openvireo-sync-server                   # http://127.0.0.1:8787
+./build/openvireo-sync-server users add alice laptop
+./build/openvireo-sync-server
 ```
 
-Or download a [release binary](docs/install.md#release-binary) for Linux, macOS or Windows, or use Docker:
+Or use Docker:
 
 ```sh
 docker run -d --name openvireo-sync -p 127.0.0.1:8787:8787 -v openvireo-sync:/data \
