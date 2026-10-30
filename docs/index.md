@@ -25,18 +25,32 @@ anything itself.
 
 ## Quick start
 
-The server is written in C++17 on [Drogon](https://github.com/drogonframework/drogon).
+Download the server for your platform from the
+[releases](https://github.com/OpenVireo/openvireo-sync-server/releases): one signed binary that needs nothing
+else installed, for Linux, macOS and Windows. On Linux, for example:
+
+```sh
+v=VERSION a=x64     # VERSION: the release without the v, e.g. 0.2.0; a: x64 or arm64
+curl -fLO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/openvireo-sync-server-$v-linux-$a.tar.gz"
+tar -xzf "openvireo-sync-server-$v-linux-$a.tar.gz" && cd "openvireo-sync-server-$v"
+./openvireo-sync-server users add alice laptop   # prints laptop's access token, shown only once
+./openvireo-sync-server                          # http://127.0.0.1:8787, data in ./data
+```
+
+[Installing and deploying](install.md#release-binary) has the macOS and Windows downloads, how to check the
+signatures, and a systemd unit. There's also a [Docker image](install.md#docker).
+
+To build it from source instead (C++17 on [Drogon](https://github.com/drogonframework/drogon)):
 
 ```sh
 brew install drogon sqlite     # or: apt install libdrogon-dev libsqlite3-dev, vcpkg install drogon sqlite3, …
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-./build/openvireo-sync-server users add alice laptop   # prints laptop's access token, shown only once
-./build/openvireo-sync-server                          # http://127.0.0.1:8787
+./build/openvireo-sync-server users add alice laptop
+./build/openvireo-sync-server
 ```
 
-Or download a release binary for Linux, macOS or Windows, or use Docker; see
-[Installing and deploying](install.md).
+See [From source](install.md#from-source) for Postgres and S3 support, and fully static builds with vcpkg.
 
 Then in OpenVireo:
 
