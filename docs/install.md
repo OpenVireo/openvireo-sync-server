@@ -217,17 +217,18 @@ docker compose -f compose.cloud.yaml run --rm migrate users add alice laptop
 docker compose -f compose.cloud.yaml run --rm --build test    # the API tests against Postgres and the bucket
 ```
 
-## DigitalOcean App Platform
+## Kamal
 
-`.do/app.yaml` deploys two instances from the Dockerfile with a managed Postgres database and a Spaces
-bucket. Create the bucket and a Spaces access key first, fill in the placeholders, then:
+`config/deploy.yml` deploys the stateless setup with [Kamal](https://kamal-deploy.org) to a Docker host,
+with a managed Postgres database and a Spaces bucket. kamal-proxy terminates HTTPS. Create the bucket and a
+Spaces access key first, copy `.kamal/secrets.example` to `.kamal/secrets` (not in git) and fill it in, then:
 
 ```sh
-doctl apps create --spec .do/app.yaml
+kamal setup     # first time
+kamal deploy    # every time after
 ```
 
-App Platform terminates HTTPS. Add users from the app's console (`openvireo-sync-server users add alice
-laptop`) or from any machine with the same `SYNC_*` settings.
+Add users with `kamal sync users add alice laptop`, or from any machine with the same `SYNC_*` settings.
 
 ## HTTPS and reverse proxies
 

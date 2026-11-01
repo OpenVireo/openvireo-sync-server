@@ -1,2 +1,5 @@
 build/
 data/
+
+# Kamal secrets, see .kamal/secrets.example.
+.kamal/secrets
