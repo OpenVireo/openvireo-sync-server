@@ -905,6 +905,11 @@ namespace syncserver
             });
 
         registerCors(config.allowedOrigins);
+        if (!config.hsts.empty()) {
+            app.registerPostHandlingAdvice([hsts = config.hsts](const HttpRequestPtr&, const HttpResponsePtr& resp) {
+                resp->addHeader("Strict-Transport-Security", hsts);
+            });
+        }
 
         app.registerHandler(
             "/api/v1/health",

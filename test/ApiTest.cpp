@@ -241,6 +241,7 @@ DROGON_TEST(AnswersCorsForTheHostedWebApp)
     CHECK(resp->statusCode() == k200OK);
     CHECK(resp->getHeader("Access-Control-Allow-Origin") == "https://app.openvireo.example");
     CHECK(resp->getHeader("Access-Control-Expose-Headers") == "ETag, X-Database-Revision, Last-Modified");
+    CHECK(resp->getHeader("Strict-Transport-Security") == "max-age=300");
 
     // Other origins get no CORS headers
     list->removeHeader("Origin");
@@ -880,6 +881,7 @@ int main(int argc, char** argv)
     config.internalToken = "internal-secret";
     // A self-hosted server reachable from the hosted web app
     config.allowedOrigins = {"https://app.openvireo.example"};
+    config.hsts = "max-age=300";
     if (config.usesPostgres()) {
         // A schema and key prefix of its own, so runs don't see each other's data
         std::string run;
