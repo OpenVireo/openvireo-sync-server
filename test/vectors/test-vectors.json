@@ -278,6 +278,40 @@
       }
     ]
   },
+  "restore_proof": {
+    "user_id": "5a0b7c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+    "old_keyset": "keyset (archived; unwrap it with keyset.auk_hex)",
+    "old_sign_pk": "wkKQVYw94fb8IUPKzmoYkIEfwSvHOQ3hVAZop_F3NnQ",
+    "new_enc_sk_hex": "861f5bf20a8c2f53cf67e36d7c11688fdaa4d14deef19797f53b3de44b3223ac",
+    "new_sign_seed_hex": "f6c02b871ca47ddf3ece5df74d27065e616c4ef4a81f5ead59af6a821b6eea8d",
+    "new_public": {
+      "enc_pk": "ef-LunGVWppK-lLYyV5fgK3s8HPtdJThpk2BMXuC2lY",
+      "sign_pk": "igxzmb2IK8Gz8MSzdD4Qrmt3qWv402dMsyYReHTfUc0",
+      "sig": "w3c5yVezozVOU_NcLx4riKslTfdJ6uSUYm1EXj4TmoRwpkVavykYggpq6krbMUPlQm1_O42uFQbzLnfAvQQUCw",
+      "fingerprint": "a96e fee4 baa6 5132 0ca6 34d2 813b 75d1 bd1d 9515"
+    },
+    "message_hex": "6f762d726573746f72652d763135613062376331642d326533662d346135622d386336642d37653866396130623163326479ff8bba71955a9a4afa52d8c95e5f80adecf073ed7494e1a64d81317b82da568a0c7399bd882bc1b3f0c4b3743e10ae6b77a96bf8d3674cb326117874df51cd",
+    "proof": "fSwruevASMQaeZpKuJUhvTjCBaGUZ7d2Ef3eU4Mp1eBZ4EAKZMPXqk8L1VnXssjSwyY-qqXPMBeiXsN0aCcxBg",
+    "reseal": {
+      "archived_sealed_key": "Ae3yi9SOgZA8g7FHXvTnlWEhxsxlGLKuXJqZTl7SI3J_3Rbz8Yu0BcZwdd_mt4mJn_L9NuSUAUaDODSuCUtEvC7efMMjx0OBgC1wl3bqncXyJ_l3L7D18jSHTSvmU9BPaAsMGaWyUvkO",
+      "aad": "ov-vault-key|3f1c2a9e-7b4d-4e8a-9c21-5d6e7f809a1b",
+      "ephemeral_sk_hex": "f2599062cf8c3fb8b0375a8a3ea86fae8e6aeef446f3b3f56109651ee21a3f43",
+      "nonce_hex": "072d3565ef0ab0721c2f5cecc9c9bd6f9ae44bddd8a5580d",
+      "sealed": "Aajrs9z4N1oCjqt_9YbZhYxXWmf7gpgcLC7t4G3Fe_ZhBy01Ze8KsHIcL1zsycm9b5rkS93YpVgNMcTyU6cZXdvbRR6Ikl98IBbCJ9QYmpyw8hn6kw4BMhPRYTKcLelwlgwUdIeiBmmA"
+    },
+    "invalid": [
+      {
+        "case": "signed by the new keyset instead of the archived one",
+        "proof": "zyy7wkrxtiwHHcMmukj4FPZx0pG28uk06t5lcBtQGFM1wl-8BJyZDfBGDxqOkSz6VEX8dbdu_wqAysLt2glNCQ",
+        "expect": "invalid_proof"
+      },
+      {
+        "case": "another user's id in the message",
+        "proof": "Q-1maOL-QJzSKXim8PMcyhiAK0er4Lb6jwez0Dx-JbIjYXIenYA1_mFapUVt-2aIAiDYIoKWoQ2_6d_7adsICA",
+        "expect": "invalid_proof"
+      }
+    ]
+  },
   "vault_kdbx": {
     "file": "vault-fixture.kdbx",
     "vault_key_hex": "c35add76c52945b2d346807a05fb03aed7d218208a7d9077194b6c2b81af6837",
