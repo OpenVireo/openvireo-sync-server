@@ -298,8 +298,9 @@ or from any machine with the same `SYNC_*` settings.
 
 ## HTTPS and reverse proxies
 
-The access token travels in the `Authorization` header, so **use HTTPS** for anything other than localhost.
-Keep the server on `127.0.0.1` and put a TLS-terminating reverse proxy (Caddy, nginx, …) in front of it. For
+The access token travels in the `Authorization` header, so OpenVireo's apps and the SDK **require HTTPS**: they
+refuse a plain `http://` server unless it's on the same computer (`localhost`, `*.localhost`, `127.0.0.0/8`,
+`[::1]`). A server on your local network needs HTTPS too. Keep the server on `127.0.0.1` and put a TLS-terminating reverse proxy (Caddy, nginx, …) in front of it. For
 example, with Caddy:
 
 ```

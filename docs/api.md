@@ -153,8 +153,9 @@ used. With the variable unset (the default) the server sends no CORS headers at 
 served from (the address in the browser's address bar, scheme and host only), keep `SYNC_AUTH_MODE` at
 `standalone`, and pick *Use my own sync server* in the web app with your server's URL and a pairing code. The
 server must be reachable over **HTTPS** (see [HTTPS and reverse proxies](install.md#https-and-reverse-proxies)): a
-page served over HTTPS can't call a plain `http://` server, except one on `localhost`. A server on `localhost` or
-the local network also works with Chrome's Private Network Access checks: preflights asking for it get
+page served over HTTPS can't call a plain `http://` server, and OpenVireo's clients refuse one anyway, except on
+`localhost`. A server on `localhost`, or an HTTPS server on the local network, also works with Chrome's Private
+Network Access checks: preflights asking for it get
 `Access-Control-Allow-Private-Network: true`. If a reverse proxy answers `OPTIONS` itself, let it pass those
 requests through.
 
