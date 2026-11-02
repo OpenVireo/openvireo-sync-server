@@ -15,6 +15,7 @@ invalid value (a word where a number belongs, an unknown `SYNC_AUTH_MODE`, S3 se
 | `SYNC_MAX_DB_BYTES` | `52428800` | Upload size limit in bytes (50 MiB); larger uploads get `413` |
 | `SYNC_HISTORY_SIZE` | `10` | How many previous versions of each database or vault to keep |
 | `SYNC_ALLOWED_ORIGINS` | *(none)* | Comma-separated web origins allowed to call the API from a browser, e.g. `https://app.example.org`; `*` allows any. See [CORS](api.md#cors) |
+| `SYNC_HSTS` | *(none)* | `Strict-Transport-Security` value sent on every response, e.g. `max-age=31536000; includeSubDomains`. Set it when the server is reached over https; browsers ignore it over plain http |
 
 ## Storage
 

@@ -66,6 +66,8 @@ namespace syncserver
         std::string internalToken;
         // Web origins allowed to call the API from a browser (CORS), e.g. https://app.example.org; "*" for any
         std::vector<std::string> allowedOrigins;
+        // Strict-Transport-Security value for every response, e.g. "max-age=31536000"; none sent when empty
+        std::string hsts;
 
         bool usesPostgres() const
         {

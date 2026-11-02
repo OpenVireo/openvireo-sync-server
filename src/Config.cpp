@@ -118,6 +118,7 @@ namespace syncserver
         }
         config.internalToken = stringFromEnv("SYNC_INTERNAL_TOKEN");
         config.allowedOrigins = parseOrigins(stringFromEnv("SYNC_ALLOWED_ORIGINS"));
+        config.hsts = stringFromEnv("SYNC_HSTS");
         config.validateAuth();
         return config;
     }
