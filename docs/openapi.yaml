@@ -15,7 +15,7 @@ info:
 
     CORS: for origins in `SYNC_ALLOWED_ORIGINS` every route answers preflight with 204, allowing
     `GET, HEAD, PUT, POST, DELETE` and the headers `Authorization, Content-Type, If-Match, If-None-Match`, and
-    responses expose `ETag, X-Database-Revision, Last-Modified`.
+    responses expose `ETag, X-Database-Revision, Last-Modified, Date`.
 
     Every response has `Cache-Control: no-store`.
 servers:

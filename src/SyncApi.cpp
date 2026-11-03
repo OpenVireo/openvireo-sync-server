@@ -878,7 +878,7 @@ namespace syncserver
                 resp->addHeader("Vary", "Origin");
                 if (originAllowed(allowed, origin)) {
                     resp->addHeader("Access-Control-Allow-Origin", origin);
-                    resp->addHeader("Access-Control-Expose-Headers", "ETag, X-Database-Revision, Last-Modified");
+                    resp->addHeader("Access-Control-Expose-Headers", "ETag, X-Database-Revision, Last-Modified, Date");
                 }
             });
         }

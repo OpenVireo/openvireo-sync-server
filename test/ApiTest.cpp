@@ -240,7 +240,7 @@ DROGON_TEST(AnswersCorsForTheHostedWebApp)
     REQUIRE(resp);
     CHECK(resp->statusCode() == k200OK);
     CHECK(resp->getHeader("Access-Control-Allow-Origin") == "https://app.openvireo.example");
-    CHECK(resp->getHeader("Access-Control-Expose-Headers") == "ETag, X-Database-Revision, Last-Modified");
+    CHECK(resp->getHeader("Access-Control-Expose-Headers") == "ETag, X-Database-Revision, Last-Modified, Date");
     CHECK(resp->getHeader("Strict-Transport-Security") == "max-age=300");
 
     // Other origins get no CORS headers
