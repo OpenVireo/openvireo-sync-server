@@ -967,7 +967,7 @@ DROGON_TEST(AnswersCorsForAllowedOrigins)
     REQUIRE(read);
     CHECK(read->statusCode() == k200OK);
     CHECK(read->getHeader("Access-Control-Allow-Origin") == WEB_ORIGIN);
-    CHECK(read->getHeader("Access-Control-Expose-Headers") == "ETag, X-Database-Revision, Last-Modified");
+    CHECK(read->getHeader("Access-Control-Expose-Headers") == "ETag, X-Database-Revision, Last-Modified, Date");
     CHECK(read->getHeader("Vary").find("Origin") != std::string::npos);
 
     // Errors carry the headers too, so the web app can read them

@@ -145,8 +145,8 @@ A browser only lets a web app on another origin call the server when the server 
 origins in `SYNC_ALLOWED_ORIGINS`, separated by commas (no path or trailing slash). For those origins the server
 answers preflight (`OPTIONS`) requests on every route with `204`, allowing `GET, HEAD, PUT, POST, DELETE` and the
 headers `Authorization, Content-Type, If-Match, If-None-Match`, and every response carries
-`Access-Control-Allow-Origin` and `Access-Control-Expose-Headers: ETag, X-Database-Revision, Last-Modified`, so the
-app can read ETags. Tokens travel in the `Authorization` header, never in cookies, so credentials mode is not
+`Access-Control-Allow-Origin` and `Access-Control-Expose-Headers: ETag, X-Database-Revision, Last-Modified, Date`, so the
+app can read ETags and the server's clock (to warn about a wrong one). Tokens travel in the `Authorization` header, never in cookies, so credentials mode is not
 used. With the variable unset (the default) the server sends no CORS headers at all.
 
 **Using a self-hosted server from the hosted web app:** set `SYNC_ALLOWED_ORIGINS` to the origin the web app is
