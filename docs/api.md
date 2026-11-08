@@ -131,7 +131,7 @@ data: {"change":"granted","vault":"<vault>"}               (vault may be null)
 ```
 
 `vault` events only for the vaults in the token, `access` events when the account server reports an access
-change for the token's subject (`change` is `granted`, `revoked`, `rotating`, `rotated` or `org`). The server
+change for the token's subject (`change` is `granted`, `revoked`, `rotating`, `rotated`, `org`, `deletion_scheduled` with `at`, the erase date, or `account_deleted`). The server
 ends the stream once the token's `exp` has passed (checked every second). The client reconnects with a fresh
 token, and does the same after any `access` event, since its vaults or roles may have changed.
 
@@ -175,6 +175,8 @@ instance:
 ```json
 {"subjects": ["user:<uuid>", "sa:<uuid>"], "event": "access", "data": {"vault": "<uuid or null>", "change": "revoked"}}
 ```
+
+`deletion_scheduled` adds `"at"`, the account's erase date (SPEC §23); other changes have no extra fields.
 
 It answers `204`. Delivery is best effort: a client that misses it still loses access when its token expires.
 

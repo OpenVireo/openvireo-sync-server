@@ -735,6 +735,7 @@ namespace syncserver
             /**
              * POST /api/v1/internal/notify from the auth server (SPEC.md §11), authenticated with
              * SYNC_INTERNAL_TOKEN: {"subjects": [...], "event": "access", "data": {"vault", "change"}}.
+             * deletion_scheduled also carries "at", the account's erase date (§23).
              * The event goes to every open account stream of those subjects, on every instance.
              */
             HttpResponsePtr notify(const HttpRequestPtr& req)
@@ -747,12 +748,15 @@ namespace syncserver
                                     "Expected {\"subjects\": [...], \"event\": \"access\", \"data\": {...}}.");
                 }
                 const auto& data = (*json)["data"];
-                static const std::set<std::string> changes{"granted", "revoked", "rotating", "rotated", "org"};
+                static const std::set<std::string> changes{
+                    "granted", "revoked", "rotating", "rotated", "org", "deletion_scheduled", "account_deleted"};
                 if (!data["change"].isString() || !changes.count(data["change"].asString())
-                    || !(data["vault"].isNull() || (data["vault"].isString() && isUuid(data["vault"].asString())))) {
+                    || !(data["vault"].isNull() || (data["vault"].isString() && isUuid(data["vault"].asString())))
+                    || !(data["at"].isNull() || data["at"].isString())) {
                     throw HttpError(k400BadRequest,
-                                    "data needs \"change\" (granted, revoked, rotating, rotated or org) and "
-                                    "\"vault\" (a vault id or null).");
+                                    "data needs \"change\" (granted, revoked, rotating, rotated, org, "
+                                    "deletion_scheduled or account_deleted), \"vault\" (a vault id or null) and "
+                                    "optionally \"at\" (a date).");
                 }
                 std::vector<std::string> subjects;
                 for (const auto& subject : (*json)["subjects"]) {
@@ -764,6 +768,9 @@ namespace syncserver
                 Json::Value event;
                 event["vault"] = data["vault"];
                 event["change"] = data["change"];
+                if (data["at"].isString()) {
+                    event["at"] = data["at"];
+                }
                 // In batches, so every message fits a Postgres notification
                 constexpr std::size_t batchSize = 50;
                 for (std::size_t start = 0; start < subjects.size(); start += batchSize) {

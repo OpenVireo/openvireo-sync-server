@@ -791,6 +791,22 @@ DROGON_TEST(DeliversAccessEventsFromTheAuthServer)
     org["data"]["change"] = "org";
     CHECK(postJson("/internal/notify", org, INTERNAL_TOKEN)->statusCode() == k204NoContent);
     CHECK(robotStream.waitFor("{\"change\":\"org\",\"vault\":null}"));
+
+    // Account deletion (SPEC.md §23): the erase date comes along
+    Json::Value scheduled;
+    scheduled["subjects"].append(alice);
+    scheduled["event"] = "access";
+    scheduled["data"]["vault"] = Json::nullValue;
+    scheduled["data"]["change"] = "deletion_scheduled";
+    scheduled["data"]["at"] = "2026-12-08T12:00:00Z";
+    CHECK(postJson("/internal/notify", scheduled, INTERNAL_TOKEN)->statusCode() == k204NoContent);
+    CHECK(aliceStream.waitFor(
+        "{\"at\":\"2026-12-08T12:00:00Z\",\"change\":\"deletion_scheduled\",\"vault\":null}"));
+    auto erased = scheduled;
+    erased["data"].removeMember("at");
+    erased["data"]["change"] = "account_deleted";
+    CHECK(postJson("/internal/notify", erased, INTERNAL_TOKEN)->statusCode() == k204NoContent);
+    CHECK(aliceStream.waitFor("{\"change\":\"account_deleted\",\"vault\":null}"));
 }
 
 DROGON_TEST(DeletesVaultsForTheAuthServer)
