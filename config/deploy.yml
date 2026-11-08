@@ -9,7 +9,7 @@
 # not in git; .kamal/secrets.example lists them.
 
 service: openvireo-sync
-image: openvire/openvireo-sync-server
+image: openvireo/openvireo-sync-server
 
 servers:
   web:
