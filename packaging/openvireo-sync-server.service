@@ -9,7 +9,7 @@
 
 [Unit]
 Description=OpenVireo sync server
-Documentation=https://openvireo.com/docs/sync-server/
+Documentation=https://developer.openvireo.com/self-hosting/
 After=network-online.target
 Wants=network-online.target
 

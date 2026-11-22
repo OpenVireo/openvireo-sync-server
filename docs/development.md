@@ -38,8 +38,8 @@ docker compose -f compose.cloud.yaml run --rm --build test
 
 ## Docs
 
-The docs in `docs/` are Markdown, published on [openvireo.com](https://openvireo.com/docs/sync-server/) by the
-site's `npm run docs:dev` from a release tag. Keep links between pages relative (`api.md#events`) so they work
+The docs in `docs/` are Markdown, published on [developer.openvireo.com](https://developer.openvireo.com/self-hosting/)
+(`/self-hosting/` and `/api/`) by `npm run sync` in openvireo-developer, from a release tag. Keep links between pages relative (`api.md#events`) so they work
 on GitHub and on the site. A user-visible change (a route, a variable, a command) belongs in the same pull
 request as its docs.
 

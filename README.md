@@ -48,7 +48,7 @@ to sync. Put HTTPS in front of the server before using it beyond localhost.
 
 ## Documentation
 
-The docs are in [`docs/`](docs/index.md) and on [openvireo.com/docs/sync-server](https://openvireo.com/docs/sync-server/):
+The docs are in [`docs/`](docs/index.md) and on [developer.openvireo.com/self-hosting/](https://developer.openvireo.com/self-hosting/):
 
 - [Overview](docs/index.md): how sync works, the quick start in full
 - [Installing and deploying](docs/install.md): release binaries, from source, Docker and GHCR images, DigitalOcean, HTTPS
