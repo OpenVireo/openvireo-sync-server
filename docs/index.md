@@ -30,7 +30,7 @@ Download the server for your platform from the
 else installed, for Linux, macOS and Windows. On Linux, for example:
 
 ```sh
-v=VERSION a=x64     # VERSION: the release without the v, e.g. 0.2.0; a: x64 or arm64
+v=VERSION a=x64     # VERSION: the release without the v, e.g. 0.3.0; a: x64 or arm64
 curl -fLO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/openvireo-sync-server-$v-linux-$a.tar.gz"
 tar -xzf "openvireo-sync-server-$v-linux-$a.tar.gz" && cd "openvireo-sync-server-$v"
 ./openvireo-sync-server users add alice laptop   # prints laptop's access token, shown only once

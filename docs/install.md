@@ -29,7 +29,7 @@ runs while you are logged in, for trying things out and for the `users` and `dev
 ### Linux
 
 ```sh
-v=VERSION a=x64     # VERSION: the release without the v, e.g. 0.2.0; a: x64 or arm64
+v=VERSION a=x64     # VERSION: the release without the v, e.g. 0.3.0; a: x64 or arm64
 curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/openvireo-sync-server-$v-linux-$a.tar.gz"
 curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/SHA256SUMS"
 curl -LO "https://github.com/OpenVireo/openvireo-sync-server/releases/download/v$v/SHA256SUMS.asc"
